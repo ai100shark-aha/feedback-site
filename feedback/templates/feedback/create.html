@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"><title>피드백 작성</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-4" style="max-width:650px">
+  <div class="mb-4">
+    <span class="badge bg-primary mb-1">{{ lesson.date }}</span>
+    <h1 class="h4">{{ lesson.title }}</h1>
+    <p class="text-muted small">수업 종료 1분 전 — 솔직하게 작성해주세요 :)</p>
+  </div>
+
+  <form method="POST">
+    {% csrf_token %}
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white fw-bold">학생 정보</div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-4">
+            <label class="form-label small">학번</label>
+            <input type="text" name="student_id" class="form-control" placeholder="예: 10101" required>
+          </div>
+          <div class="col-3">
+            <label class="form-label small">번호</label>
+            <input type="text" name="student_num" class="form-control" placeholder="예: 1" required>
+          </div>
+          <div class="col-5">
+            <label class="form-label small">이름</label>
+            <input type="text" name="student_name" class="form-control" placeholder="홍길동" required>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white fw-bold">
+        배운 내용 요약
+      </div>
+      <div class="card-body">
+        <label class="form-label text-muted small">오늘 배운 핵심 개념 3가지를 본인만의 언어로 정의한다면?</label>
+        <textarea name="summary" class="form-control" rows="3" placeholder="①  ②  ③ " required></textarea>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white fw-bold">
+        문제 해결 과정
+      </div>
+      <div class="card-body">
+        <label class="form-label text-muted small">실습 중 겪었던 오류나 어려움은 무엇이며, 어떻게 해결했나요?</label>
+        <textarea name="problem" class="form-control" rows="3" placeholder="오류: ...  해결: ..." required></textarea>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white fw-bold">
+        진로와의 연결
+      </div>
+      <div class="card-body">
+        <label class="form-label text-muted small">오늘 배운 내용이 본인의 희망 진로(또는 다른 과목)와 어떤 관련이 있나요?</label>
+        <textarea name="career" class="form-control" rows="3" placeholder="희망 진로: ...  연결점: ..." required></textarea>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white fw-bold">
+        심화 학습 의지
+      </div>
+      <div class="card-body">
+        <label class="form-label text-muted small">오늘 배운 내용 중 더 깊게 공부해보고 싶은 주제나 궁금한 점은?</label>
+        <textarea name="deeplearn" class="form-control" rows="3" placeholder="더 알고 싶은 것: ..." required></textarea>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white fw-bold">
+        동료 칭찬
+      </div>
+      <div class="card-body">
+        <label class="form-label text-muted small">오늘 실습이나 토론에서 나에게 가장 큰 도움을 준 친구와 그 이유는?</label>
+        <textarea name="peer" class="form-control" rows="2" placeholder="친구 이름: ...  이유: ..." required></textarea>
+      </div>
+    </div>
+
+    <div class="d-grid">
+      <button type="submit" class="btn btn-primary btn-lg">제출하기</button>
+    </div>
+  </form>
+</div>
+</body>
+</html>
