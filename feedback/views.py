@@ -1,5 +1,26 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from .models import Lesson, FeedbackRecord
+import gspread
+from google.oauth2.service_account import Credentials
+from datetime import datetime
+import os
+
+def get_sheet():
+    import json
+    scope = [
+        'https://spreadsheets.google.com/feeds',
+        'https://www.googleapis.com/auth/drive'
+    ]
+    creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+    if creds_json:
+        creds_dict = json.loads(creds_json)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    else:
+        creds_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'credentials.json')
+        creds = Credentials.from_service_account_file(creds_path, scopes=scope)
+    client = gspread.authorize(creds)
+    sheet = client.open_by_key('1A7awsXWOu-WPiRjY6vk8rPEhBh8PpGiTp3pGAlellsM').sheet1
+    return sheet
 
 def index(request):
     lessons = Lesson.objects.all().order_by('-date')
@@ -8,24 +29,51 @@ def index(request):
 def feedback_create(request, lesson_id):
     lesson = get_object_or_404(Lesson, id=lesson_id)
     if request.method == 'POST':
+        student_id   = request.POST['student_id']
+        student_num  = request.POST['student_num']
+        student_name = request.POST['student_name']
+        summary      = request.POST['summary']
+        problem      = request.POST['problem']
+        career       = request.POST['career']
+        deeplearn    = request.POST['deeplearn']
+        peer         = request.POST['peer']
+
+        # Django DB 저장
         FeedbackRecord.objects.create(
             lesson       = lesson,
-            student_id   = request.POST['student_id'],
-            student_num  = request.POST['student_num'],
-            student_name = request.POST['student_name'],
-            summary      = request.POST['summary'],
-            problem      = request.POST['problem'],
-            career       = request.POST['career'],
-            deeplearn    = request.POST['deeplearn'],
-            peer         = request.POST['peer'],
+            student_id   = student_id,
+            student_num  = student_num,
+            student_name = student_name,
+            summary      = summary,
+            problem      = problem,
+            career       = career,
+            deeplearn    = deeplearn,
+            peer         = peer,
         )
+
+        # 구글 시트 저장
+        try:
+            sheet = get_sheet()
+            sheet.append_row([
+                datetime.now().strftime('%Y-%m-%d %H:%M'),
+                str(lesson),
+                student_id,
+                student_num,
+                student_name,
+                summary,
+                problem,
+                career,
+                deeplearn,
+                peer,
+            ])
+        except Exception as e:
+            print(f"구글 시트 저장 오류: {e}")
+
         return render(request, 'feedback/done.html', {'lesson': lesson})
     return render(request, 'feedback/create.html', {'lesson': lesson})
 
 def lesson_result(request, lesson_id):
     lesson = get_object_or_404(Lesson, id=lesson_id)
-
-    # 학번 입력 전: 검색 화면만 표시
     student_id = request.GET.get('student_id', '').strip()
     record     = None
     error      = None
