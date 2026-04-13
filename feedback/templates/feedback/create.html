@@ -86,8 +86,12 @@
     </div>
 
     <div class="d-grid">
-      <button type="submit" class="btn btn-primary btn-lg">제출하기</button>
-    </div>
+          <button type="submit" class="btn btn-primary btn-lg" id="submit-btn"
+                  onclick="this.disabled=true; this.innerText='제출 중...'; this.form.submit();">
+            제출하기
+          </button>
+          <a href="/" class="btn btn-outline-secondary">목록으로 돌아가기</a>
+        </div>
   </form>
 </div>
 </body>

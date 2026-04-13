@@ -6,9 +6,15 @@
 </head>
 <body class="bg-light">
 <div class="container py-5 text-center" style="max-width:500px">
-  <div class="display-1 mb-3">✅</div>
-  <h2>제출 완료!</h2>
-  <p class="text-muted">{{ lesson.title }} 피드백이 저장되었습니다.</p>
+  {% if already %}
+    <div class="display-1 mb-3">⚠️</div>
+    <h2>이미 제출했습니다!</h2>
+    <p class="text-muted">이 수업 피드백은 이미 제출되어 있습니다.<br>중복 제출은 저장되지 않습니다.</p>
+  {% else %}
+    <div class="display-1 mb-3">✅</div>
+    <h2>제출 완료!</h2>
+    <p class="text-muted">{{ lesson.title }} 피드백이 저장되었습니다.</p>
+  {% endif %}
   <a href="/" class="btn btn-outline-primary mt-2">처음으로</a>
 </div>
 </body>

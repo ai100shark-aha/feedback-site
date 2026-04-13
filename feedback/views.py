@@ -38,38 +38,53 @@ def feedback_create(request, lesson_id):
         deeplearn    = request.POST['deeplearn']
         peer         = request.POST['peer']
 
-        # Django DB 저장
-        FeedbackRecord.objects.create(
-            lesson       = lesson,
-            student_id   = student_id,
-            student_num  = student_num,
-            student_name = student_name,
-            summary      = summary,
-            problem      = problem,
-            career       = career,
-            deeplearn    = deeplearn,
-            peer         = peer,
-        )
+        # 중복 제출 확인 (같은 수업 + 같은 학번)
+        already = FeedbackRecord.objects.filter(
+            lesson=lesson,
+            student_id=student_id
+        ).exists()
 
-        # 구글 시트 저장
-        try:
-            sheet = get_sheet()
-            sheet.append_row([
-                datetime.now().strftime('%Y-%m-%d %H:%M'),
-                str(lesson),
-                student_id,
-                student_num,
-                student_name,
-                summary,
-                problem,
-                career,
-                deeplearn,
-                peer,
-            ])
-        except Exception as e:
-            print(f"구글 시트 저장 오류: {e}")
+        if not already:
+            # Django DB 저장
+            FeedbackRecord.objects.create(
+                lesson       = lesson,
+                student_id   = student_id,
+                student_num  = student_num,
+                student_name = student_name,
+                summary      = summary,
+                problem      = problem,
+                career       = career,
+                deeplearn    = deeplearn,
+                peer         = peer,
+            )
 
-        return render(request, 'feedback/done.html', {'lesson': lesson})
+            # 구글 시트 백그라운드 저장
+            import threading
+            def save_to_sheet():
+                try:
+                    sheet = get_sheet()
+                    sheet.append_row([
+                        datetime.now().strftime('%Y-%m-%d %H:%M'),
+                        str(lesson),
+                        student_id,
+                        student_num,
+                        student_name,
+                        summary,
+                        problem,
+                        career,
+                        deeplearn,
+                        peer,
+                    ])
+                except Exception as e:
+                    print(f"구글 시트 저장 오류: {e}")
+
+            threading.Thread(target=save_to_sheet).start()
+
+        return render(request, 'feedback/done.html', {
+            'lesson': lesson,
+            'already': already,
+        })
+
     return render(request, 'feedback/create.html', {'lesson': lesson})
 
 def lesson_result(request, lesson_id):
