@@ -6,13 +6,18 @@
 </head>
 <body class="bg-light">
 <div class="container py-4" style="max-width:650px">
+
   <div class="mb-4">
     <span class="badge bg-primary mb-1">{{ lesson.date }}</span>
     <h1 class="h4">{{ lesson.title }}</h1>
     <p class="text-muted small">수업 종료 1분 전 — 솔직하게 작성해주세요 :)</p>
   </div>
 
-  <form method="POST">
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" id="feedback-form">
     {% csrf_token %}
 
     <div class="card shadow-sm mb-3">
@@ -20,79 +25,106 @@
       <div class="card-body">
         <div class="row g-2">
           <div class="col-4">
-            <label class="form-label small">학번</label>
-            <input type="text" name="student_id" class="form-control" placeholder="예: 10101" required>
+            <label class="form-label small">학번 *</label>
+            <input type="text" name="student_id" class="form-control"
+                   placeholder="예: 10101" value="{{ prev.student_id }}" required>
           </div>
           <div class="col-3">
-            <label class="form-label small">번호</label>
-            <input type="text" name="student_num" class="form-control" placeholder="예: 1" required>
+            <label class="form-label small">번호 *</label>
+            <input type="text" name="student_num" class="form-control"
+                   placeholder="예: 1" value="{{ prev.student_num }}" required>
           </div>
           <div class="col-5">
-            <label class="form-label small">이름</label>
-            <input type="text" name="student_name" class="form-control" placeholder="홍길동" required>
+            <label class="form-label small">이름 *</label>
+            <input type="text" name="student_name" class="form-control"
+                   placeholder="홍길동" value="{{ prev.student_name }}" required>
           </div>
         </div>
       </div>
     </div>
 
     <div class="card shadow-sm mb-3">
-      <div class="card-header bg-white fw-bold">
-        배운 내용 요약
-      </div>
+      <div class="card-header bg-white fw-bold">배운 내용 요약 *</div>
       <div class="card-body">
         <label class="form-label text-muted small">오늘 배운 핵심 개념 3가지를 본인만의 언어로 정의한다면?</label>
-        <textarea name="summary" class="form-control" rows="3" placeholder="①  ②  ③ " required></textarea>
+        <textarea name="summary" class="form-control" rows="3"
+                  placeholder="①  ②  ③" required minlength="10">{{ prev.summary }}</textarea>
+        <div class="form-text">최소 10자 이상 입력해주세요.</div>
       </div>
     </div>
 
     <div class="card shadow-sm mb-3">
-      <div class="card-header bg-white fw-bold">
-        문제 해결 과정
-      </div>
+      <div class="card-header bg-white fw-bold">문제 해결 과정 *</div>
       <div class="card-body">
         <label class="form-label text-muted small">실습 중 겪었던 오류나 어려움은 무엇이며, 어떻게 해결했나요?</label>
-        <textarea name="problem" class="form-control" rows="3" placeholder="오류: ...  해결: ..." required></textarea>
+        <textarea name="problem" class="form-control" rows="3"
+                  placeholder="오류: ...  해결: ..." required minlength="10">{{ prev.problem }}</textarea>
+        <div class="form-text">최소 10자 이상 입력해주세요.</div>
       </div>
     </div>
 
     <div class="card shadow-sm mb-3">
-      <div class="card-header bg-white fw-bold">
-        진로와의 연결
-      </div>
+      <div class="card-header bg-white fw-bold">진로와의 연결 *</div>
       <div class="card-body">
         <label class="form-label text-muted small">오늘 배운 내용이 본인의 희망 진로(또는 다른 과목)와 어떤 관련이 있나요?</label>
-        <textarea name="career" class="form-control" rows="3" placeholder="희망 진로: ...  연결점: ..." required></textarea>
+        <textarea name="career" class="form-control" rows="3"
+                  placeholder="희망 진로: ...  연결점: ..." required minlength="10">{{ prev.career }}</textarea>
+        <div class="form-text">최소 10자 이상 입력해주세요.</div>
       </div>
     </div>
 
     <div class="card shadow-sm mb-3">
-      <div class="card-header bg-white fw-bold">
-        심화 학습 의지
-      </div>
+      <div class="card-header bg-white fw-bold">심화 학습 의지 *</div>
       <div class="card-body">
         <label class="form-label text-muted small">오늘 배운 내용 중 더 깊게 공부해보고 싶은 주제나 궁금한 점은?</label>
-        <textarea name="deeplearn" class="form-control" rows="3" placeholder="더 알고 싶은 것: ..." required></textarea>
+        <textarea name="deeplearn" class="form-control" rows="3"
+                  placeholder="더 알고 싶은 것: ..." required minlength="10">{{ prev.deeplearn }}</textarea>
+        <div class="form-text">최소 10자 이상 입력해주세요.</div>
       </div>
     </div>
 
     <div class="card shadow-sm mb-3">
-      <div class="card-header bg-white fw-bold">
-        동료 칭찬
-      </div>
+      <div class="card-header bg-white fw-bold">동료 칭찬 *</div>
       <div class="card-body">
         <label class="form-label text-muted small">오늘 실습이나 토론에서 나에게 가장 큰 도움을 준 친구와 그 이유는?</label>
-        <textarea name="peer" class="form-control" rows="2" placeholder="친구 이름: ...  이유: ..." required></textarea>
+        <textarea name="peer" class="form-control" rows="2"
+                  placeholder="친구 이름: ...  이유: ..." required minlength="5">{{ prev.peer }}</textarea>
       </div>
     </div>
 
-    <div class="d-grid">
-          <button type="submit" class="btn btn-primary btn-lg" id="submit-btn"
-                  onclick="this.disabled=true; this.innerText='제출 중...'; this.form.submit();">
-            제출하기
-          </button>
-          <a href="/" class="btn btn-outline-secondary">목록으로 돌아가기</a>
-        </div>
+    <div class="d-grid gap-2">
+      <button type="submit" class="btn btn-primary btn-lg" id="submit-btn">
+        {{ is_edit|yesno:"수정하기,제출하기" }}
+      </button>
+      <a href="/" class="btn btn-outline-secondary">목록으로 돌아가기</a>
+    </div>
+
   </form>
 </div>
+
+<script>
+document.getElementById('feedback-form').addEventListener('submit', function(e) {
+  const btn = document.getElementById('submit-btn');
+  const textareas = this.querySelectorAll('textarea[required]');
+  let valid = true;
+
+  textareas.forEach(function(ta) {
+    ta.style.borderColor = '';
+    if (ta.value.trim().length < (parseInt(ta.getAttribute('minlength')) || 1)) {
+      ta.style.borderColor = 'red';
+      valid = false;
+    }
+  });
+
+  if (!valid) {
+    e.preventDefault();
+    alert('모든 항목을 빠짐없이 입력해주세요! (각 항목 최소 10자 이상)');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerText = '제출 중...';
+});
+</script>
 </body>
 </html>

@@ -282,14 +282,33 @@ def feedback_create(request, lesson_id):
         return redirect('index')
 
     if request.method == 'POST':
-        student_id   = request.POST['student_id']
-        student_num  = request.POST['student_num']
-        student_name = request.POST['student_name']
-        summary      = request.POST['summary']
-        problem      = request.POST['problem']
-        career       = request.POST['career']
-        deeplearn    = request.POST['deeplearn']
-        peer         = request.POST['peer']
+        student_id   = request.POST['student_id'].strip()
+        student_num  = request.POST['student_num'].strip()
+        student_name = request.POST['student_name'].strip()
+        summary      = request.POST['summary'].strip()
+        problem      = request.POST['problem'].strip()
+        career       = request.POST['career'].strip()
+        deeplearn    = request.POST['deeplearn'].strip()
+        peer         = request.POST['peer'].strip()
+
+        # 빈 칸 서버측 검증
+        if not all([student_id, student_num, student_name,
+                    summary, problem, career, deeplearn, peer]):
+            return render(request, 'feedback/create.html', {
+                'lesson': lesson,
+                'error': '모든 항목을 입력해주세요!',
+                'prev': request.POST,
+                'is_edit': False,
+            })
+
+        # 최소 글자수 검증
+        if any(len(x) < 5 for x in [summary, problem, career, deeplearn, peer]):
+            return render(request, 'feedback/create.html', {
+                'lesson': lesson,
+                'error': '각 항목을 좀 더 자세히 입력해주세요! (최소 5자 이상)',
+                'prev': request.POST,
+                'is_edit': False,
+            })
 
         already = False
         try:
@@ -328,7 +347,87 @@ def feedback_create(request, lesson_id):
             'already': already,
         })
 
-    return render(request, 'feedback/create.html', {'lesson': lesson})
+    return render(request, 'feedback/create.html', {
+        'lesson': lesson,
+        'prev': {},
+        'is_edit': False,
+        'error': None,
+    })
+
+
+def feedback_edit(request, lesson_id, student_id):
+    lesson = next((l for l in LESSONS if l['id'] == lesson_id), None)
+    if not lesson:
+        return redirect('index')
+
+    # 기존 데이터 불러오기
+    existing = {}
+    row_index = None
+    try:
+        sheet = get_sheet()
+        records = sheet.get_all_values()
+        for i, row in enumerate(records[1:], start=2):
+            if len(row) >= 5 and row[2] == str(lesson_id) and row[4] == student_id:
+                existing = {
+                    'student_id':   row[4],
+                    'student_num':  row[3],
+                    'student_name': row[5],
+                    'summary':      row[6] if len(row) > 6 else '',
+                    'problem':      row[7] if len(row) > 7 else '',
+                    'career':       row[8] if len(row) > 8 else '',
+                    'deeplearn':    row[9] if len(row) > 9 else '',
+                    'peer':         row[10] if len(row) > 10 else '',
+                }
+                row_index = i
+                break
+    except Exception as e:
+        print(f"데이터 불러오기 오류: {e}")
+
+    if not existing:
+        return redirect('index')
+
+    if request.method == 'POST':
+        summary   = request.POST['summary'].strip()
+        problem   = request.POST['problem'].strip()
+        career    = request.POST['career'].strip()
+        deeplearn = request.POST['deeplearn'].strip()
+        peer      = request.POST['peer'].strip()
+
+        if any(len(x) < 5 for x in [summary, problem, career, deeplearn, peer]):
+            return render(request, 'feedback/create.html', {
+                'lesson': lesson,
+                'error': '각 항목을 좀 더 자세히 입력해주세요!',
+                'prev': request.POST,
+                'is_edit': True,
+            })
+
+        # 구글 시트 해당 행 수정
+        def update_sheet():
+            try:
+                sheet = get_sheet()
+                sheet.update(f'G{row_index}:K{row_index}', [[
+                    summary, problem, career, deeplearn, peer
+                ]])
+                # A열 수정시간 업데이트
+                sheet.update(f'A{row_index}', [[
+                    datetime.now().strftime('%Y-%m-%d %H:%M') + ' (수정)'
+                ]])
+            except Exception as e:
+                print(f"수정 오류: {e}")
+        threading.Thread(target=update_sheet).start()
+
+        return render(request, 'feedback/done.html', {
+            'lesson': lesson,
+            'already': False,
+            'is_edit': True,
+        })
+
+    return render(request, 'feedback/create.html', {
+        'lesson': lesson,
+        'prev': existing,
+        'is_edit': True,
+        'error': None,
+    })
 
 def lesson_result(request, lesson_id):
     lesson = next((l for l in LESSONS if l['id'] == lesson_id), None)

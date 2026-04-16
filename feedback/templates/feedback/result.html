@@ -40,8 +40,12 @@
   <div class="card shadow-sm">
     <div class="card-header bg-white d-flex justify-content-between align-items-center">
       <span class="fw-bold">{{ record.student_num }}번 {{ record.student_name }}</span>
-      <a href="/student/{{ record.student_id }}/"
-         class="btn btn-outline-primary btn-sm">학기 전체 기록 보기</a>
+      <div class="d-flex gap-2">
+        <a href="/edit/{{ lesson.id }}/{{ record.student_id }}/"
+           class="btn btn-warning btn-sm">수정하기</a>
+        <a href="/student/{{ record.student_id }}/"
+           class="btn btn-outline-primary btn-sm">학기 전체 기록</a>
+      </div>
     </div>
     <div class="card-body">
 
