@@ -445,12 +445,13 @@ def lesson_result(request, lesson_id):
             for row in records[1:]:
                 if len(row) >= 5 and row[2] == str(lesson_id) and row[4] == student_id:
                     record = {
+                        'student_id':   row[4],   # ← 이 줄 추가!
                         'student_num':  row[3],
                         'student_name': row[5],
-                        'summary':      row[6],
-                        'problem':      row[7],
-                        'career':       row[8],
-                        'deeplearn':    row[9],
+                        'summary':      row[6] if len(row) > 6 else '',
+                        'problem':      row[7] if len(row) > 7 else '',
+                        'career':       row[8] if len(row) > 8 else '',
+                        'deeplearn':    row[9] if len(row) > 9 else '',
                         'peer':         row[10] if len(row) > 10 else '',
                     }
                     break
