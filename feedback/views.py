@@ -302,10 +302,10 @@ def feedback_create(request, lesson_id):
             })
 
         # 최소 글자수 검증
-        if any(len(x) < 5 for x in [summary, problem, career, deeplearn, peer]):
+        if any(len(x) < 2 for x in [summary, problem, career, deeplearn, peer]):
             return render(request, 'feedback/create.html', {
                 'lesson': lesson,
-                'error': '각 항목을 좀 더 자세히 입력해주세요! (최소 5자 이상)',
+                'error': '각 항목을 좀 더 자세히 입력해주세요! (최소 2자 이상)',
                 'prev': request.POST,
                 'is_edit': False,
             })
@@ -393,7 +393,7 @@ def feedback_edit(request, lesson_id, student_id):
         deeplearn = request.POST['deeplearn'].strip()
         peer      = request.POST['peer'].strip()
 
-        if any(len(x) < 5 for x in [summary, problem, career, deeplearn, peer]):
+        if any(len(x) < 2 for x in [summary, problem, career, deeplearn, peer]):
             return render(request, 'feedback/create.html', {
                 'lesson': lesson,
                 'error': '각 항목을 좀 더 자세히 입력해주세요!',
