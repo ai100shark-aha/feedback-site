@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>활동문제 풀기</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .q-card { border-left: 4px solid #0d6efd; }
+    .answer-tab-pane textarea, .answer-tab-pane input { font-size: 15px; }
+    code-area { font-family: 'Courier New', monospace; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container py-4" style="max-width:700px">
+
+  <div class="mb-3">
+    <a href="/" class="btn btn-outline-secondary btn-sm">← 메인</a>
+  </div>
+
+  <div class="text-center mb-3">
+    <h4 class="fw-bold">✏️ 활동문제 풀기</h4>
+    <p class="text-muted small mb-0">{{ lesson.title }} | {{ quizset.title }}</p>
+  </div>
+
+  <form method="POST" action="/quiz/{{ lesson.id }}/submit/" enctype="multipart/form-data" id="quizForm">
+    {% csrf_token %}
+
+    <!-- 학생 정보 -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-primary text-white fw-bold small">① 학생 정보 입력</div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-4">
+            <label class="form-label small mb-1">학번</label>
+            <input type="text" name="student_id" class="form-control"
+                   value="{{ student_id }}" required placeholder="예) 10301"
+                   pattern="\d{5,8}" title="숫자로 된 학번을 입력하세요">
+          </div>
+          <div class="col-3">
+            <label class="form-label small mb-1">번호</label>
+            <input type="number" name="student_num" class="form-control"
+                   required placeholder="예) 12" min="1" max="50">
+          </div>
+          <div class="col-5">
+            <label class="form-label small mb-1">이름</label>
+            <input type="text" name="student_name" class="form-control"
+                   required placeholder="홍길동">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 문제 목록 -->
+    <div class="mb-2 fw-bold small text-muted">② 각 문제마다 하나 이상의 방식으로 답안을 입력하세요</div>
+
+    {% for q in questions %}
+    <div class="card shadow-sm mb-3 q-card">
+      <div class="card-header bg-light d-flex justify-content-between align-items-center">
+        <span class="fw-bold">문제 {{ q.number }}</span>
+        <span class="badge bg-secondary">{{ q.score }}점</span>
+      </div>
+      <div class="card-body">
+        <p class="mb-3" style="white-space:pre-wrap; font-size:15px">{{ q.content }}</p>
+
+        <!-- 답안 탭 -->
+        <ul class="nav nav-tabs mb-3" id="tab_{{ q.id }}" role="tablist">
+          <li class="nav-item">
+            <button class="nav-link active" data-bs-toggle="tab"
+                    data-bs-target="#text_{{ q.id }}" type="button">📝 텍스트</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab"
+                    data-bs-target="#code_{{ q.id }}" type="button">💻 코드</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab"
+                    data-bs-target="#img_{{ q.id }}" type="button">📷 사진</button>
+          </li>
+        </ul>
+        <div class="tab-content answer-tab-pane">
+          <div class="tab-pane fade show active" id="text_{{ q.id }}">
+            <textarea name="ans_text_{{ q.id }}" class="form-control" rows="3"
+                      placeholder="답안을 텍스트로 작성하세요."></textarea>
+          </div>
+          <div class="tab-pane fade" id="code_{{ q.id }}">
+            <textarea name="ans_code_{{ q.id }}" class="form-control code-area" rows="5"
+                      placeholder="# 파이썬 코드를 작성하세요" style="font-family:monospace"></textarea>
+          </div>
+          <div class="tab-pane fade" id="img_{{ q.id }}">
+            <div class="mb-2 text-muted small">손으로 쓴 답안을 카메라로 찍어 올리세요.</div>
+            <input type="file" name="ans_img_{{ q.id }}" class="form-control"
+                   accept="image/*" capture="environment">
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+
+    <div class="alert alert-warning small">
+      ⚠️ 제출 후에는 수정이 불가합니다. 모든 문제를 확인한 후 제출하세요.
+    </div>
+    <button type="submit" class="btn btn-success w-100 py-2 fw-bold">
+      답안 제출하기
+    </button>
+  </form>
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
