@@ -48,8 +48,8 @@
       <div class="card-body">
         <label class="form-label text-muted small">오늘 배운 핵심 개념 3가지를 본인만의 언어로 정의한다면?</label>
         <textarea name="summary" class="form-control" rows="3"
-                  placeholder="①  ②  ③" required minlength="10">{{ prev.summary }}</textarea>
-        <div class="form-text">최소 10자 이상 입력해주세요.</div>
+                  placeholder="①  ②  ③" required minlength="2">{{ prev.summary }}</textarea>
+        <div class="form-text">최소 2자 이상 입력해주세요.</div>
       </div>
     </div>
 
@@ -58,8 +58,8 @@
       <div class="card-body">
         <label class="form-label text-muted small">실습 중 겪었던 오류나 어려움은 무엇이며, 어떻게 해결했나요?</label>
         <textarea name="problem" class="form-control" rows="3"
-                  placeholder="오류: ...  해결: ..." required minlength="10">{{ prev.problem }}</textarea>
-        <div class="form-text">최소 10자 이상 입력해주세요.</div>
+                  placeholder="오류: ...  해결: ..." required minlength="2">{{ prev.problem }}</textarea>
+        <div class="form-text">최소 2자 이상 입력해주세요.</div>
       </div>
     </div>
 
@@ -68,8 +68,8 @@
       <div class="card-body">
         <label class="form-label text-muted small">오늘 배운 내용이 본인의 희망 진로(또는 다른 과목)와 어떤 관련이 있나요?</label>
         <textarea name="career" class="form-control" rows="3"
-                  placeholder="희망 진로: ...  연결점: ..." required minlength="10">{{ prev.career }}</textarea>
-        <div class="form-text">최소 10자 이상 입력해주세요.</div>
+                  placeholder="희망 진로: ...  연결점: ..." required minlength="2">{{ prev.career }}</textarea>
+        <div class="form-text">최소 2자 이상 입력해주세요.</div>
       </div>
     </div>
 
@@ -78,8 +78,8 @@
       <div class="card-body">
         <label class="form-label text-muted small">오늘 배운 내용 중 더 깊게 공부해보고 싶은 주제나 궁금한 점은?</label>
         <textarea name="deeplearn" class="form-control" rows="3"
-                  placeholder="더 알고 싶은 것: ..." required minlength="10">{{ prev.deeplearn }}</textarea>
-        <div class="form-text">최소 10자 이상 입력해주세요.</div>
+                  placeholder="더 알고 싶은 것: ..." required minlength="2">{{ prev.deeplearn }}</textarea>
+        <div class="form-text">최소 2자 이상 입력해주세요.</div>
       </div>
     </div>
 
@@ -110,7 +110,7 @@ document.getElementById('feedback-form').addEventListener('submit', function(e) 
 
   textareas.forEach(function(ta) {
     ta.style.borderColor = '';
-    if (ta.value.trim().length < (parseInt(ta.getAttribute('minlength')) || 1)) {
+    if (ta.value.trim().length < 2) {
       ta.style.borderColor = 'red';
       valid = false;
     }
@@ -118,7 +118,7 @@ document.getElementById('feedback-form').addEventListener('submit', function(e) 
 
   if (!valid) {
     e.preventDefault();
-    alert('모든 항목을 빠짐없이 입력해주세요! (각 항목 최소 10자 이상)');
+    alert('모든 항목을 빠짐없이 입력해주세요! (각 항목 최소 2자 이상)');
     return;
   }
 
