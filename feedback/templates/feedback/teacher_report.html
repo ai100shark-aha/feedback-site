@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>학생 피드백 리포트</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .student-row { cursor: pointer; }
+    .student-row:hover { background: #f0f7ff; }
+    .submission-detail { background: #f8f9fa; font-size: 13px; }
+    .label-col { color: #666; font-weight: 600; width: 110px; vertical-align: top; padding-top: 4px; }
+    .content-col { white-space: pre-wrap; }
+    .count-badge { min-width: 36px; }
+    thead th { position: sticky; top: 0; background: #2f5496; color: #fff; z-index: 10; }
+    .class-header { background: #e8f0fe; border-left: 4px solid #2f5496; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container-fluid py-3" style="max-width: 1100px">
+
+  <!-- 상단 바 -->
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div>
+      <a href="/teacher/" class="btn btn-outline-secondary btn-sm me-1">← 대시보드</a>
+      <span class="fw-bold fs-5">📊 학생 피드백 리포트</span>
+    </div>
+    <div class="d-flex gap-2 align-items-center flex-wrap">
+      <!-- 반 필터 -->
+      <form method="GET" class="d-flex gap-1 align-items-center">
+        <label class="small text-muted mb-0">반 필터:</label>
+        <select name="class" class="form-select form-select-sm" style="width:auto"
+                onchange="this.form.submit()">
+          <option value="">전체</option>
+          {% for cn in all_classes %}
+          <option value="{{ cn }}" {% if filter_class == cn %}selected{% endif %}>{{ cn }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      <!-- 엑셀 다운로드 -->
+      <a href="/teacher/report/excel/" class="btn btn-success btn-sm">
+        📥 엑셀 다운로드
+      </a>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+
+  {% if not students_by_class %}
+  <div class="alert alert-info">
+    아직 제출된 피드백 데이터가 없습니다.
+  </div>
+  {% endif %}
+
+  {% for class_name, students in students_by_class.items %}
+  <div class="card shadow-sm mb-4">
+    <div class="card-header class-header d-flex justify-content-between align-items-center">
+      <span class="fw-bold">{{ class_name }}</span>
+      <span class="badge bg-primary">{{ students|length }}명 제출</span>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0">
+          <thead>
+            <tr>
+              <th style="width:60px">번호</th>
+              <th style="width:110px">학번</th>
+              <th style="width:90px">이름</th>
+              <th style="width:80px" class="text-center">제출 횟수</th>
+              <th>제출 차시</th>
+              <th style="width:80px" class="text-center">상세</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for st in students %}
+            <tr class="student-row" data-bs-toggle="collapse"
+                data-bs-target="#detail_{{ forloop.parentloop.counter }}_{{ forloop.counter }}">
+              <td>{{ st.student_num }}</td>
+              <td>{{ st.student_id }}</td>
+              <td class="fw-bold">{{ st.student_name }}</td>
+              <td class="text-center">
+                <span class="badge bg-primary count-badge">{{ st.count }}회</span>
+              </td>
+              <td class="small text-muted">
+                {% for sub in st.submissions %}{{ sub.title }}{% if not forloop.last %}, {% endif %}{% endfor %}
+              </td>
+              <td class="text-center">
+                <span class="text-primary">▼</span>
+              </td>
+            </tr>
+            <!-- 상세 내용 (접기/펼치기) -->
+            <tr class="collapse" id="detail_{{ forloop.parentloop.counter }}_{{ forloop.counter }}">
+              <td colspan="6" class="p-0">
+                <div class="submission-detail p-3">
+                  {% for sub in st.submissions %}
+                  <div class="mb-3 pb-2 {% if not forloop.last %}border-bottom{% endif %}">
+                    <div class="fw-bold small text-primary mb-2">
+                      📅 {{ sub.date }} | {{ sub.title }}
+                    </div>
+                    <table class="table table-sm table-borderless mb-0">
+                      <tr>
+                        <td class="label-col">핵심 개념</td>
+                        <td class="content-col">{{ sub.summary }}</td>
+                      </tr>
+                      <tr>
+                        <td class="label-col">오류/해결</td>
+                        <td class="content-col">{{ sub.problem }}</td>
+                      </tr>
+                      <tr>
+                        <td class="label-col">진로 연결</td>
+                        <td class="content-col">{{ sub.career }}</td>
+                      </tr>
+                      <tr>
+                        <td class="label-col">심화 학습</td>
+                        <td class="content-col">{{ sub.deeplearn }}</td>
+                      </tr>
+                      <tr>
+                        <td class="label-col">칭찬 한마디</td>
+                        <td class="content-col">{{ sub.peer }}</td>
+                      </tr>
+                    </table>
+                  </div>
+                  {% endfor %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

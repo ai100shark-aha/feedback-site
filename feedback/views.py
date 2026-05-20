@@ -1,4 +1,5 @@
 from django.shortcuts import render, redirect, get_object_or_404
+from django.http import HttpResponse
 from .models import Lesson, FeedbackRecord, QuizSet, Question, StudentAnswer
 import gspread
 from google.oauth2.service_account import Credentials
@@ -996,3 +997,269 @@ def teacher_grade_student(request, quizset_id, lesson_id, student_id):
         'student_id':   student_id,
         'student_name': answers[0].student_name,
     })
+
+
+# ═══════════════════════════════════════════════════════════════
+#  학생 피드백 데이터 리포트  (Report System)
+# ═══════════════════════════════════════════════════════════════
+
+# 반 이름 매핑 (lesson_id 앞자리로 판단)
+def _class_from_lesson_id(lesson_id):
+    try:
+        lid = int(lesson_id)
+        prefix = lid // 100
+        mapping = {1: '8반', 2: '9반', 3: '10반', 4: '11반', 5: '12반', 6: '13반'}
+        return mapping.get(prefix, f'기타({lid})')
+    except Exception:
+        return '알 수 없음'
+
+
+def teacher_report(request):
+    """교사용: 학생 피드백 데이터 전체 리포트 (웹)"""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+
+    error = None
+    students_by_class = OrderedDict()
+
+    try:
+        sheet = get_sheet()
+        rows = sheet.get_all_values()
+        headers = rows[0] if rows else []
+        data_rows = rows[1:] if len(rows) > 1 else []
+
+        # 학생별로 집계
+        student_map = {}  # student_id → dict
+        for row in data_rows:
+            if len(row) < 6:
+                continue
+            date      = row[0] if len(row) > 0 else ''
+            title     = row[1] if len(row) > 1 else ''
+            lesson_id = row[2] if len(row) > 2 else ''
+            s_num     = row[3] if len(row) > 3 else ''
+            s_id      = row[4] if len(row) > 4 else ''
+            s_name    = row[5] if len(row) > 5 else ''
+            summary   = row[6] if len(row) > 6 else ''
+            problem   = row[7] if len(row) > 7 else ''
+            career    = row[8] if len(row) > 8 else ''
+            deeplearn = row[9] if len(row) > 9 else ''
+            peer      = row[10] if len(row) > 10 else ''
+
+            if not s_id:
+                continue
+
+            class_name = _class_from_lesson_id(lesson_id)
+
+            if s_id not in student_map:
+                student_map[s_id] = {
+                    'student_id':   s_id,
+                    'student_num':  s_num,
+                    'student_name': s_name,
+                    'class_name':   class_name,
+                    'count':        0,
+                    'submissions':  [],
+                }
+            student_map[s_id]['count'] += 1
+            student_map[s_id]['submissions'].append({
+                'date':      date,
+                'title':     title,
+                'summary':   summary,
+                'problem':   problem,
+                'career':    career,
+                'deeplearn': deeplearn,
+                'peer':      peer,
+            })
+
+        # 반별로 그룹화 → 번호순 정렬
+        for s in sorted(student_map.values(),
+                        key=lambda x: (x['class_name'], x['student_num'].zfill(3))):
+            cn = s['class_name']
+            if cn not in students_by_class:
+                students_by_class[cn] = []
+            students_by_class[cn].append(s)
+
+    except Exception as e:
+        error = f'데이터 불러오기 오류: {e}'
+
+    filter_class = request.GET.get('class', '')
+    if filter_class and filter_class in students_by_class:
+        students_by_class = {filter_class: students_by_class[filter_class]}
+
+    return render(request, 'feedback/teacher_report.html', {
+        'students_by_class': students_by_class,
+        'error':             error,
+        'filter_class':      filter_class,
+        'all_classes':       list(OrderedDict(
+            (s['class_name'], None)
+            for s in student_map.values()
+        ).keys()) if 'student_map' in dir() else [],
+    })
+
+
+def teacher_report_excel(request):
+    """교사용: 학생 피드백 데이터 엑셀 다운로드"""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        sheet_data = get_sheet()
+        rows = sheet_data.get_all_values()
+        data_rows = rows[1:] if len(rows) > 1 else []
+
+        # 학생별 집계
+        student_map = {}
+        for row in data_rows:
+            if len(row) < 6:
+                continue
+            s_id   = row[4] if len(row) > 4 else ''
+            s_num  = row[3] if len(row) > 3 else ''
+            s_name = row[5] if len(row) > 5 else ''
+            lesson_id = row[2] if len(row) > 2 else ''
+            if not s_id:
+                continue
+            class_name = _class_from_lesson_id(lesson_id)
+            if s_id not in student_map:
+                student_map[s_id] = {
+                    'class': class_name, 'num': s_num, 'name': s_name,
+                    'count': 0, 'submissions': []
+                }
+            student_map[s_id]['count'] += 1
+            student_map[s_id]['submissions'].append({
+                'date':  row[0], 'title': row[1],
+                'summary':   row[6]  if len(row) > 6  else '',
+                'problem':   row[7]  if len(row) > 7  else '',
+                'career':    row[8]  if len(row) > 8  else '',
+                'deeplearn': row[9]  if len(row) > 9  else '',
+                'peer':      row[10] if len(row) > 10 else '',
+            })
+
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)  # 기본 시트 삭제
+
+        # ── 스타일 정의 ──
+        hdr_fill   = PatternFill('solid', fgColor='2F5496')
+        hdr_font   = Font(color='FFFFFF', bold=True, size=11)
+        sub_fill   = PatternFill('solid', fgColor='D6E4F7')
+        sub_font   = Font(bold=True, size=10)
+        wrap_align = Alignment(wrap_text=True, vertical='top')
+        center     = Alignment(horizontal='center', vertical='center')
+        thin       = Side(style='thin', color='CCCCCC')
+        border     = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        def set_hdr(cell, value):
+            cell.value = value
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = center
+            cell.border = border
+
+        def set_cell(cell, value, align=None):
+            cell.value = value
+            cell.alignment = align or wrap_align
+            cell.border = border
+
+        # ── 시트 1: 전체 요약 ──
+        ws_sum = wb.create_sheet('전체요약')
+        cols = ['반', '번호', '학번', '이름', '제출횟수', '제출차시목록']
+        for ci, col in enumerate(cols, 1):
+            set_hdr(ws_sum.cell(1, ci), col)
+        ws_sum.row_dimensions[1].height = 22
+
+        ri = 2
+        for s in sorted(student_map.values(),
+                        key=lambda x: (x['class'], x['num'].zfill(3))):
+            titles = [sub['title'] for sub in s['submissions']]
+            row_data = [
+                s['class'], s['num'], list(student_map.keys())[list(student_map.values()).index(s)],
+                s['name'], s['count'], ', '.join(titles)
+            ]
+            # student_id 찾기
+            sid = next(k for k, v in student_map.items() if v is s)
+            row_data[2] = sid
+            for ci, val in enumerate(row_data, 1):
+                set_cell(ws_sum.cell(ri, ci), val,
+                         center if ci <= 5 else wrap_align)
+            ri += 1
+
+        ws_sum.column_dimensions['A'].width = 8
+        ws_sum.column_dimensions['B'].width = 7
+        ws_sum.column_dimensions['C'].width = 12
+        ws_sum.column_dimensions['D'].width = 10
+        ws_sum.column_dimensions['E'].width = 9
+        ws_sum.column_dimensions['F'].width = 50
+
+        # ── 반별 상세 시트 ──
+        classes_order = ['8반', '9반', '10반', '11반', '12반', '13반']
+        class_students = {cn: [] for cn in classes_order}
+        for sid, s in student_map.items():
+            cn = s['class']
+            if cn in class_students:
+                class_students[cn].append((sid, s))
+
+        detail_cols = ['번호', '학번', '이름', '날짜', '차시', '핵심개념3가지', '오류/어려움과해결', '진로연결', '심화학습의지', '칭찬한마디']
+
+        for cn in classes_order:
+            students_in_class = sorted(class_students.get(cn, []),
+                                       key=lambda x: x[1]['num'].zfill(3))
+            if not students_in_class:
+                continue
+
+            ws = wb.create_sheet(cn)
+            for ci, col in enumerate(detail_cols, 1):
+                set_hdr(ws.cell(1, ci), col)
+            ws.row_dimensions[1].height = 22
+
+            ri = 2
+            for sid, s in students_in_class:
+                first = True
+                for sub in s['submissions']:
+                    num_cell  = ws.cell(ri, 1)
+                    id_cell   = ws.cell(ri, 2)
+                    name_cell = ws.cell(ri, 3)
+                    if first:
+                        set_cell(num_cell,  s['num'],  center)
+                        set_cell(id_cell,   sid,       center)
+                        set_cell(name_cell, s['name'], center)
+                        first = False
+                    else:
+                        set_cell(num_cell,  '', center)
+                        set_cell(id_cell,   '', center)
+                        set_cell(name_cell, '', center)
+
+                    set_cell(ws.cell(ri, 4),  sub['date'],      center)
+                    set_cell(ws.cell(ri, 5),  sub['title'])
+                    set_cell(ws.cell(ri, 6),  sub['summary'])
+                    set_cell(ws.cell(ri, 7),  sub['problem'])
+                    set_cell(ws.cell(ri, 8),  sub['career'])
+                    set_cell(ws.cell(ri, 9),  sub['deeplearn'])
+                    set_cell(ws.cell(ri, 10), sub['peer'])
+                    ws.row_dimensions[ri].height = 60
+                    ri += 1
+
+            # 열 너비
+            widths = [7, 12, 10, 18, 20, 35, 35, 35, 35, 25]
+            for ci, w in enumerate(widths, 1):
+                ws.column_dimensions[get_column_letter(ci)].width = w
+
+        # ── HttpResponse 반환 ──
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        today = datetime.now().strftime('%Y%m%d')
+        fname = f'feedback_report_{today}.xlsx'
+        response = HttpResponse(
+            buf.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{fname}"'
+        return response
+
+    except ImportError:
+        return HttpResponse('openpyxl 패키지가 필요합니다. requirements.txt 확인 후 재배포하세요.', status=500)
+    except Exception as e:
+        return HttpResponse(f'오류: {e}', status=500)

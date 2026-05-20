@@ -20,4 +20,7 @@ urlpatterns = [
     path('teacher/quiz/<int:quizset_id>/', views.teacher_quiz_detail, name='teacher_quiz_detail'),
     path('teacher/grade/<int:quizset_id>/<int:lesson_id>/<str:student_id>/',
          views.teacher_grade_student, name='teacher_grade_student'),
+    # ── 피드백 리포트 ──
+    path('teacher/report/', views.teacher_report, name='teacher_report'),
+    path('teacher/report/excel/', views.teacher_report_excel, name='teacher_report_excel'),
 ]
