@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>교사용 지도서 업로드</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-4" style="max-width:680px">
+
+  <div class="mb-3 d-flex gap-2">
+    <a href="/teacher/" class="btn btn-outline-secondary btn-sm">← 대시보드</a>
+    <a href="/quiz/generate/" class="btn btn-outline-primary btn-sm">📝 문제 생성하기 →</a>
+  </div>
+
+  <h4 class="fw-bold mb-1">📚 교사용 지도서 업로드</h4>
+  <p class="text-muted small mb-3">
+    지도서 PDF를 <strong>1회</strong> 업로드하면 전체 텍스트가 저장됩니다.<br>
+    이후에는 <a href="/quiz/generate/">문제 생성</a> 메뉴에서 교과서 범위를 지정해 문제를 만드세요.
+  </p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+  {% if success %}
+  <div class="alert alert-success">{{ success }} &nbsp; <a href="/quiz/generate/" class="alert-link">이제 문제를 생성하세요 →</a></div>
+  {% endif %}
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <form method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        <div class="mb-3">
+          <label class="form-label fw-bold">교사 비밀번호</label>
+          <input type="password" name="password" class="form-control" required placeholder="비밀번호 입력">
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-bold">지도서 이름</label>
+          <input type="text" name="guide_name" class="form-control"
+                 placeholder="예: 정보 교과 지도서 2026" value="정보 교과 지도서 2026">
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-bold">지도서 PDF 파일</label>
+          <input type="file" name="guide_pdf" class="form-control" accept=".pdf">
+          <div class="form-text">텍스트 기반 PDF면 자동 추출됩니다. 스캔본은 직접 입력란을 사용하세요.</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-bold">직접 입력 <span class="text-muted fw-normal">(PDF 추출 실패 시 또는 보완용)</span></label>
+          <textarea name="manual_text" class="form-control" rows="5"
+                    placeholder="지도서 내용을 직접 붙여넣기 하세요."></textarea>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-100">📤 업로드 &amp; 저장</button>
+      </form>
+    </div>
+  </div>
+
+  {% if guides %}
+  <h6 class="fw-bold mb-2">저장된 지도서 목록</h6>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover bg-white rounded shadow-sm">
+      <thead class="table-light">
+        <tr><th>이름</th><th>페이지</th><th>텍스트량</th><th>업로드일</th></tr>
+      </thead>
+      <tbody>
+        {% for g in guides %}
+        <tr>
+          <td class="fw-bold">{{ g.name }}</td>
+          <td>{{ g.page_count }}p</td>
+          <td>{{ g.full_text|length|floatformat:"0" }}자</td>
+          <td class="text-muted small">{{ g.uploaded_at|date:"m/d H:i" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="mt-2">
+    <a href="/quiz/generate/" class="btn btn-primary btn-sm">📝 이 지도서로 문제 생성하기 →</a>
+  </div>
+  {% endif %}
+
+</div>
+</body>
+</html>

@@ -13,7 +13,8 @@ urlpatterns = [
     path('edit/<int:lesson_id>/<str:student_id>/', views.feedback_edit, name='feedback_edit'),
     path('student/<str:student_id>/', views.student_summary, name='student_summary'),
     # ── 활동문제 채점 시스템 ──
-    path('quiz/upload/', views.quiz_upload, name='quiz_upload'),
+    path('guide/upload/', views.guide_upload, name='guide_upload'),       # 지도서 1회 업로드
+    path('quiz/generate/', views.quiz_generate, name='quiz_generate'),    # 범위 설정 → 문제 생성
     path('quiz/<int:lesson_id>/', views.quiz_solve, name='quiz_solve'),
     path('quiz/<int:lesson_id>/submit/', views.quiz_submit, name='quiz_submit'),
     path('quiz/<int:lesson_id>/result/', views.quiz_result, name='quiz_result'),

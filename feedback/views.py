@@ -1,6 +1,6 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponse
-from .models import Lesson, FeedbackRecord, QuizSet, Question, StudentAnswer
+from .models import Lesson, FeedbackRecord, GuideBook, QuizSet, Question, StudentAnswer
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
@@ -654,11 +654,64 @@ def _grade_with_claude(q_content, model_answer, ans_text, ans_code, ans_img_b64,
     return None, '자동 채점 중 오류 발생 – 교사가 직접 채점합니다.'
 
 
-# ── View: 교사 – 지도서 업로드 ────────────────────────────────────
+# ── View: 교사 – 지도서 1회 업로드 ──────────────────────────────────
 
-def quiz_upload(request):
-    """교사용: PDF 지도서 업로드 → Claude가 문제/정답 자동 추출"""
+def guide_upload(request):
+    """교사용: 지도서 PDF를 1회 업로드해서 전체 텍스트 저장"""
     error = success = None
+    guides = GuideBook.objects.all().order_by('-uploaded_at')
+
+    if request.method == 'POST':
+        pw = request.POST.get('password', '')
+        if pw != TEACHER_PASSWORD:
+            error = '비밀번호가 올바르지 않습니다.'
+        else:
+            name        = request.POST.get('guide_name', '').strip() or '정보 교과 지도서'
+            pdf_file    = request.FILES.get('guide_pdf')
+            manual_text = request.POST.get('manual_text', '').strip()
+
+            if not pdf_file and not manual_text:
+                error = 'PDF 파일 또는 텍스트 직접 입력 중 하나는 필수입니다.'
+            else:
+                try:
+                    full_text = ''
+                    page_count = 0
+                    if pdf_file:
+                        pdf_bytes = pdf_file.read()
+                        full_text = _extract_text_from_pdf(pdf_bytes)
+                        # 페이지 수 파악
+                        try:
+                            import pdfplumber, io as _io
+                            with pdfplumber.open(_io.BytesIO(pdf_bytes)) as pdf:
+                                page_count = len(pdf.pages)
+                        except Exception:
+                            pass
+                    if len(full_text) < 100 and manual_text:
+                        full_text = manual_text
+                    if len(full_text) < 100:
+                        error = 'PDF에서 텍스트를 추출하지 못했습니다. 직접 입력란을 사용해 주세요.'
+                    else:
+                        gb = GuideBook.objects.create(
+                            name=name,
+                            full_text=full_text,
+                            page_count=page_count,
+                        )
+                        success = f'✓ 지도서 [{gb.name}] 저장 완료! ({page_count}페이지, {len(full_text):,}자)'
+                        guides = GuideBook.objects.all().order_by('-uploaded_at')
+                except Exception as e:
+                    error = f'처리 중 오류: {e}'
+
+    return render(request, 'feedback/guide_upload.html', {
+        'error': error, 'success': success, 'guides': guides,
+    })
+
+
+# ── View: 교사 – 범위 설정 → 문제 생성 ──────────────────────────────
+
+def quiz_generate(request):
+    """교사용: 저장된 지도서에서 교과서 범위를 지정해 문제 생성"""
+    error = success = None
+    guides   = GuideBook.objects.all().order_by('-uploaded_at')
     existing = QuizSet.objects.all().order_by('chapter_num')
 
     if request.method == 'POST':
@@ -666,32 +719,79 @@ def quiz_upload(request):
         if pw != TEACHER_PASSWORD:
             error = '비밀번호가 올바르지 않습니다.'
         else:
+            guide_id    = request.POST.get('guide_id', '').strip()
             chapter_raw = request.POST.get('chapter_num', '').strip()
-            pdf_file    = request.FILES.get('guide_pdf')
-            manual_text = request.POST.get('manual_text', '').strip()
+            topic       = request.POST.get('range_topic', '').strip()
+            pages       = request.POST.get('range_pages', '').strip()
+            extra_text  = request.POST.get('extra_text', '').strip()
+            q_count     = request.POST.get('q_count', '3').strip()
+            q_type      = request.POST.get('q_type', '혼합').strip()
 
             if not chapter_raw:
                 error = '차시 번호를 입력해주세요.'
-            elif not pdf_file and not manual_text:
-                error = 'PDF 파일 또는 내용 직접 입력 중 하나는 필수입니다.'
+            elif not topic:
+                error = '교과서 범위(주제/단원명)를 입력해주세요.'
             else:
                 try:
                     chapter_num = int(chapter_raw)
-                    guide_text = ''
-                    if pdf_file:
-                        guide_text = _extract_text_from_pdf(pdf_file.read())
-                    if len(guide_text) < 50 and manual_text:
-                        guide_text = manual_text
-                    if len(guide_text) < 50:
-                        error = 'PDF에서 텍스트를 추출하지 못했습니다. 아래 직접 입력란을 사용해 주세요.'
+                    n_questions = max(1, min(10, int(q_count)))
+
+                    # 범위 텍스트 추출
+                    range_text = ''
+                    guide = None
+                    if guide_id:
+                        try:
+                            guide = GuideBook.objects.get(id=int(guide_id))
+                            full = guide.full_text
+                            # 페이지 범위 파싱 (예: "45-62" 또는 "45")
+                            if pages:
+                                p_parts = pages.replace('~', '-').split('-')
+                                try:
+                                    p_start = int(p_parts[0]) - 1
+                                    p_end   = int(p_parts[-1]) if len(p_parts) > 1 else p_start + 30
+                                except Exception:
+                                    p_start, p_end = 0, 999
+                                # 텍스트를 페이지 단위로 분할 (\f 또는 단순 균등 분할)
+                                pages_split = full.split('\f')
+                                if len(pages_split) > 3:
+                                    range_text = '\n'.join(pages_split[p_start:p_end])
+                                else:
+                                    # 균등 분할 추정
+                                    total_chars = len(full)
+                                    if guide.page_count > 0:
+                                        cpp = total_chars // guide.page_count
+                                        range_text = full[p_start * cpp : p_end * cpp]
+                                    else:
+                                        range_text = full
+                            else:
+                                # 주제 키워드로 관련 구간 추출 (전후 5000자)
+                                idx = full.find(topic[:10])
+                                if idx >= 0:
+                                    range_text = full[max(0, idx-500) : idx+8000]
+                                else:
+                                    range_text = full[:12000]
+                        except GuideBook.DoesNotExist:
+                            range_text = ''
+
+                    # extra_text 보완
+                    if extra_text:
+                        range_text = (range_text + '\n\n' + extra_text).strip()
+
+                    if len(range_text) < 30 and not extra_text:
+                        error = '지도서를 선택하거나 교과서 내용을 직접 입력해주세요.'
                     else:
-                        result = _extract_questions_with_claude(guide_text, chapter_num)
-                        qs, _ = QuizSet.objects.update_or_create(
+                        result = _generate_questions_with_claude(
+                            range_text, chapter_num, topic, n_questions, q_type
+                        )
+                        qs, created = QuizSet.objects.update_or_create(
                             chapter_num=chapter_num,
                             defaults={
-                                'title':      result.get('title', f'{chapter_num}차시 활동문제'),
-                                'guide_text': guide_text,
-                                'is_active':  True,
+                                'guidebook':   guide,
+                                'title':       result.get('title', f'{chapter_num}차시 – {topic}'),
+                                'range_topic': topic,
+                                'range_pages': pages,
+                                'range_text':  range_text[:5000],
+                                'is_active':   True,
                             }
                         )
                         qs.questions.all().delete()
@@ -704,14 +804,76 @@ def quiz_upload(request):
                                 score=q.get('score', 10),
                             )
                         cnt = qs.questions.count()
-                        success = f'✓ [{qs.title}] 문제 {cnt}개 등록 완료!'
+                        action = '생성' if created else '재생성'
+                        success = f'✓ [{qs.title}] 문제 {cnt}개 {action} 완료!'
                         existing = QuizSet.objects.all().order_by('chapter_num')
                 except Exception as e:
-                    error = f'처리 중 오류: {e}'
+                    error = f'문제 생성 중 오류: {e}'
 
-    return render(request, 'feedback/quiz_upload.html', {
-        'error': error, 'success': success, 'existing': existing,
+    return render(request, 'feedback/quiz_generate.html', {
+        'error': error, 'success': success,
+        'guides': guides, 'existing': existing,
     })
+
+
+def _generate_questions_with_claude(range_text, chapter_num, topic, n_questions, q_type):
+    """Claude로 교과서 범위 텍스트 → 문제·정답 생성"""
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return {'title': f'{chapter_num}차시 – {topic}', 'questions': []}
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        type_guide = {
+            '단답형':  '모두 단답형(짧은 답변) 문제로 만드세요.',
+            '서술형':  '모두 서술형(2~4문장 설명) 문제로 만드세요.',
+            '코딩':    '모두 코드 작성 또는 코드 분석 문제로 만드세요.',
+            '혼합':    '단답형, 서술형, 코딩 문제를 고루 섞어 만드세요.',
+        }.get(q_type, '단답형, 서술형을 고루 섞어 만드세요.')
+
+        prompt = f"""당신은 고등학교 정보 교과 교사입니다.
+아래는 교과서 [{topic}] 단원(또는 {chapter_num}차시)의 내용입니다.
+
+--- 교과서 내용 ---
+{range_text[:10000]}
+---
+
+위 내용을 바탕으로 학생 활동 문제 {n_questions}개를 만들어 주세요.
+{type_guide}
+
+요구사항:
+- 교과서 내용에서 직접 출제하세요 (내용 범위를 벗어나지 마세요)
+- 학생이 이해했는지 확인할 수 있는 핵심 문제로 만드세요
+- 모범답안은 교사가 채점할 수 있을 만큼 상세하게 작성하세요
+- 배점은 문제 난이도에 따라 5~20점 사이로 설정하세요
+
+아래 JSON 형식으로만 응답하세요 (설명 없이):
+{{
+  "title": "{chapter_num}차시 – {{단원/주제 제목}}",
+  "questions": [
+    {{
+      "number": 1,
+      "type": "단답형|서술형|코딩 중 하나",
+      "content": "학생에게 보여줄 문제 전문",
+      "model_answer": "교사용 모범답안 (상세히)",
+      "score": 10
+    }}
+  ]
+}}"""
+
+        msg = client.messages.create(
+            model='claude-sonnet-4-20250514',
+            max_tokens=4096,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        raw = msg.content[0].text
+        m = re.search(r'\{[\s\S]*\}', raw)
+        if m:
+            return json.loads(m.group())
+    except Exception as e:
+        print(f'Claude 문제 생성 오류: {e}')
+    return {'title': f'{chapter_num}차시 – {topic}', 'questions': []}
 
 
 # ── View: 학생 – 문제 풀기 ────────────────────────────────────────

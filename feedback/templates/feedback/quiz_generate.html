@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>문제 생성</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .step-badge { width:28px;height:28px;border-radius:50%;background:#0d6efd;color:#fff;
+                  display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0; }
+    .qs-row { border-left:3px solid #0d6efd; padding-left:10px; margin-bottom:8px; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container py-4" style="max-width:720px">
+
+  <div class="mb-3 d-flex gap-2">
+    <a href="/teacher/" class="btn btn-outline-secondary btn-sm">← 대시보드</a>
+    <a href="/guide/upload/" class="btn btn-outline-secondary btn-sm">📚 지도서 업로드</a>
+  </div>
+
+  <h4 class="fw-bold mb-1">📝 활동문제 생성</h4>
+  <p class="text-muted small mb-4">저장된 지도서에서 교과서 범위를 지정하면 Claude AI가 문제와 모범답안을 자동 생성합니다.</p>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+  {% if success %}
+  <div class="alert alert-success fw-bold">{{ success }}</div>
+  {% endif %}
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-body">
+      <form method="POST">
+        {% csrf_token %}
+
+        <!-- STEP 1: 비밀번호 -->
+        <div class="d-flex gap-2 align-items-start mb-3">
+          <span class="step-badge mt-1">1</span>
+          <div class="flex-grow-1">
+            <label class="form-label fw-bold mb-1">교사 비밀번호</label>
+            <input type="password" name="password" class="form-control" required placeholder="비밀번호">
+          </div>
+        </div>
+
+        <!-- STEP 2: 지도서 선택 -->
+        <div class="d-flex gap-2 align-items-start mb-3">
+          <span class="step-badge mt-1">2</span>
+          <div class="flex-grow-1">
+            <label class="form-label fw-bold mb-1">지도서 선택</label>
+            {% if guides %}
+            <select name="guide_id" class="form-select">
+              <option value="">선택 안함 (직접 입력만 사용)</option>
+              {% for g in guides %}
+              <option value="{{ g.id }}">{{ g.name }} ({{ g.page_count }}p)</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">지도서가 없으면 <a href="/guide/upload/">업로드</a>하세요.</div>
+            {% else %}
+            <div class="alert alert-warning py-2 small mb-0">
+              저장된 지도서가 없습니다. <a href="/guide/upload/">지도서를 먼저 업로드</a>하거나 아래 직접 입력을 사용하세요.
+            </div>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- STEP 3: 교과서 범위 -->
+        <div class="d-flex gap-2 align-items-start mb-3">
+          <span class="step-badge mt-1">3</span>
+          <div class="flex-grow-1">
+            <label class="form-label fw-bold mb-1">교과서 범위 설정 <span class="text-danger">*필수</span></label>
+            <div class="row g-2">
+              <div class="col-md-7">
+                <input type="text" name="range_topic" class="form-control"
+                       placeholder="단원/주제명 (예: 조건문과 반복문)" required>
+                <div class="form-text">지도서에서 이 키워드가 있는 구간을 자동 탐색합니다.</div>
+              </div>
+              <div class="col-md-5">
+                <input type="text" name="range_pages" class="form-control"
+                       placeholder="페이지 범위 (예: 45-62, 선택)">
+                <div class="form-text">지정 시 해당 페이지만 사용합니다.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 4: 차시 및 옵션 -->
+        <div class="d-flex gap-2 align-items-start mb-3">
+          <span class="step-badge mt-1">4</span>
+          <div class="flex-grow-1">
+            <label class="form-label fw-bold mb-1">차시 및 문제 옵션</label>
+            <div class="row g-2">
+              <div class="col-4">
+                <label class="form-text">차시 번호 *</label>
+                <input type="number" name="chapter_num" class="form-control" min="1" max="39"
+                       required placeholder="예: 5">
+              </div>
+              <div class="col-4">
+                <label class="form-text">문제 수</label>
+                <select name="q_count" class="form-select">
+                  <option value="2">2개</option>
+                  <option value="3" selected>3개</option>
+                  <option value="4">4개</option>
+                  <option value="5">5개</option>
+                  <option value="7">7개</option>
+                  <option value="10">10개</option>
+                </select>
+              </div>
+              <div class="col-4">
+                <label class="form-text">문제 유형</label>
+                <select name="q_type" class="form-select">
+                  <option value="혼합" selected>혼합</option>
+                  <option value="단답형">단답형</option>
+                  <option value="서술형">서술형</option>
+                  <option value="코딩">코딩</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 5: 보완 입력 (선택) -->
+        <div class="d-flex gap-2 align-items-start mb-4">
+          <span class="step-badge mt-1" style="background:#6c757d;">5</span>
+          <div class="flex-grow-1">
+            <label class="form-label fw-bold mb-1">교과서 내용 직접 입력 <span class="text-muted fw-normal">(선택 – 지도서 보완 또는 단독 사용)</span></label>
+            <textarea name="extra_text" class="form-control" rows="5"
+                      placeholder="문제를 만들 교과서 내용을 직접 붙여넣기 하세요.&#10;지도서를 선택했을 경우 보완 자료로 사용됩니다."></textarea>
+          </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-100 py-2 fw-bold">
+          ✨ AI 문제 생성
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 기존 문제 세트 -->
+  {% if existing %}
+  <h6 class="fw-bold mb-2">등록된 문제 세트</h6>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover bg-white rounded shadow-sm">
+      <thead class="table-light">
+        <tr><th>차시</th><th>제목</th><th>범위</th><th>문제</th><th>상태</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for qs in existing %}
+        <tr>
+          <td>{{ qs.chapter_num }}차시</td>
+          <td>{{ qs.title }}</td>
+          <td class="text-muted small">{{ qs.range_topic }}{% if qs.range_pages %} (p.{{ qs.range_pages }}){% endif %}</td>
+          <td>{{ qs.questions.count }}개</td>
+          <td>
+            {% if qs.is_active %}
+            <span class="badge bg-success">활성</span>
+            {% else %}
+            <span class="badge bg-secondary">비활성</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/teacher/quiz/{{ qs.id }}/" class="btn btn-outline-primary btn-sm py-0">현황</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+</div>
+</body>
+</html>
