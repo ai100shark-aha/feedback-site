@@ -4,6 +4,8 @@ from feedback import views
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    # ── keep-alive ──
+    path('ping/', views.ping, name='ping'),
     # ── 기존 피드백 시스템 ──
     path('', views.index, name='index'),
     path('write/<int:lesson_id>/', views.feedback_create, name='feedback_create'),

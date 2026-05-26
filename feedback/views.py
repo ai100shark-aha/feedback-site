@@ -872,7 +872,7 @@ def quiz_result(request, lesson_id):
 # ── View: 교사 대시보드 ───────────────────────────────────────────
 
 def teacher_dashboard(request):
-    """교사 로그인 + 퀴즈 관리 목록"""
+    """교사 로그인 + 퀴즈 관리 목록 + 피드백 제출 현황"""
     if request.method == 'POST':
         pw = request.POST.get('password', '')
         if pw == TEACHER_PASSWORD:
@@ -898,9 +898,72 @@ def teacher_dashboard(request):
             'pending_grade': pending_grade,
         })
 
+    # ── 피드백 제출 현황 (Google Sheets 기반) ──
+    feedback_stats = []
+    feedback_error = None
+    try:
+        sheet = get_sheet()
+        rows = sheet.get_all_values()
+        data_rows = rows[1:] if len(rows) > 1 else []
+
+        # 반별 × 차시별 제출자 집계
+        from collections import defaultdict
+        import re as _re
+        # class_prefix: 1→8반, 2→9반, ...
+        prefix_map = {1:'8반', 2:'9반', 3:'10반', 4:'11반', 5:'12반', 6:'13반'}
+
+        # 오늘 날짜 기준 지난 차시 중 반별 최근 5개 제출 현황
+        today_str = datetime.now().strftime('%Y-%m-%d')
+
+        # 반별 차시별 제출자 수
+        class_lesson_students = defaultdict(lambda: defaultdict(set))
+        for row in data_rows:
+            if len(row) < 5:
+                continue
+            lesson_id_str = row[2]
+            student_id_val = row[4]
+            if not lesson_id_str or not student_id_val:
+                continue
+            try:
+                lid = int(lesson_id_str)
+                prefix = lid // 100
+                class_name = prefix_map.get(prefix, '기타')
+                class_lesson_students[class_name][lid].add(student_id_val)
+            except Exception:
+                continue
+
+        # 반별로 최근 차시 현황 정리
+        today_dt = datetime.now().date()
+        for class_name in ['8반','9반','10반','11반','12반','13반']:
+            lessons_for_class = [l for l in LESSONS if l['class'] == class_name]
+            # 오늘 이전 차시만 (이미 진행된 수업)
+            past_lessons = [l for l in lessons_for_class
+                            if l['date'] <= today_str]
+            if not past_lessons:
+                continue
+            # 최근 5차시
+            recent = past_lessons[-5:]
+            lesson_data = []
+            for l in recent:
+                submitted = len(class_lesson_students[class_name].get(l['id'], set()))
+                lesson_data.append({
+                    'title': l['title'],
+                    'date': l['date'],
+                    'submitted': submitted,
+                })
+            feedback_stats.append({
+                'class_name': class_name,
+                'lessons': lesson_data,
+                'total_submitted': sum(len(v) for v in class_lesson_students[class_name].values()),
+            })
+    except Exception as e:
+        feedback_error = f'피드백 현황 로드 오류: {e}'
+
     return render(request, 'feedback/teacher_dashboard.html', {
         'authenticated': True,
         'stats': stats,
+        'feedback_stats': feedback_stats,
+        'feedback_error': feedback_error,
     })
 
 
@@ -1094,6 +1157,12 @@ def teacher_report(request):
             for s in student_map.values()
         ).keys()) if 'student_map' in dir() else [],
     })
+
+
+def ping(request):
+    """콜드스타트 방지용 keep-alive 엔드포인트"""
+    from django.http import JsonResponse
+    return JsonResponse({'status': 'ok', 'time': datetime.now().isoformat()})
 
 
 def teacher_report_excel(request):
