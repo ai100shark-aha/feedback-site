@@ -325,7 +325,8 @@ def feedback_create(request, lesson_id):
             sheet = get_sheet()
             records = sheet.get_all_values()
             for row in records[1:]:
-                if len(row) >= 5 and row[2] == str(lesson_id) and row[4] == student_id:
+                # 실제 시트 레이아웃: [1]=수업명, [2]=학번
+                if len(row) >= 3 and row[1] == lesson['title'] and row[2] == student_id:
                     already = True
                     break
         except Exception as e:
@@ -338,15 +339,14 @@ def feedback_create(request, lesson_id):
                     sheet.append_row([
                         datetime.now().strftime('%Y-%m-%d %H:%M'),
                         lesson['title'],
-                        str(lesson_id),
-                        student_num,
-                        student_id,
-                        student_name,
-                        summary,
-                        problem,
-                        career,
-                        deeplearn,
-                        peer,
+                        student_id,    # C[2]: 학번
+                        student_num,   # D[3]: 번호
+                        student_name,  # E[4]: 이름
+                        summary,       # F[5]: 핵심개념
+                        problem,       # G[6]: 문제해결
+                        career,        # H[7]: 진로연결
+                        deeplearn,     # I[8]: 심화학습
+                        peer,          # J[9]: 칭찬
                     ])
                 except Exception as e:
                     print(f"구글 시트 저장 오류: {e}")
@@ -377,16 +377,17 @@ def feedback_edit(request, lesson_id, student_id):
         sheet = get_sheet()
         records = sheet.get_all_values()
         for i, row in enumerate(records[1:], start=2):
-            if len(row) >= 5 and row[2] == str(lesson_id) and row[4] == student_id:
+            # 실제 시트: [1]=수업명, [2]=학번
+            if len(row) >= 3 and row[1] == lesson['title'] and row[2] == student_id:
                 existing = {
-                    'student_id':   row[4],
+                    'student_id':   row[2],
                     'student_num':  row[3],
-                    'student_name': row[5],
-                    'summary':      row[6] if len(row) > 6 else '',
-                    'problem':      row[7] if len(row) > 7 else '',
-                    'career':       row[8] if len(row) > 8 else '',
-                    'deeplearn':    row[9] if len(row) > 9 else '',
-                    'peer':         row[10] if len(row) > 10 else '',
+                    'student_name': row[4] if len(row) > 4 else '',
+                    'summary':      row[5] if len(row) > 5 else '',
+                    'problem':      row[6] if len(row) > 6 else '',
+                    'career':       row[7] if len(row) > 7 else '',
+                    'deeplearn':    row[8] if len(row) > 8 else '',
+                    'peer':         row[9] if len(row) > 9 else '',
                 }
                 row_index = i
                 break
@@ -415,7 +416,8 @@ def feedback_edit(request, lesson_id, student_id):
         def update_sheet():
             try:
                 sheet = get_sheet()
-                sheet.update(f'G{row_index}:K{row_index}', [[
+                # 실제 시트: 핵심개념=F[5], 문제해결=G[6], ..., 칭찬=J[9]
+                sheet.update(f'F{row_index}:J{row_index}', [[
                     summary, problem, career, deeplearn, peer
                 ]])
                 # A열 수정시간 업데이트
@@ -453,16 +455,17 @@ def lesson_result(request, lesson_id):
             sheet = get_sheet()
             records = sheet.get_all_values()
             for row in records[1:]:
-                if len(row) >= 5 and row[2] == str(lesson_id) and row[4] == student_id:
+                # 실제 시트: [1]=수업명, [2]=학번
+                if len(row) >= 3 and row[1] == lesson['title'] and row[2] == student_id:
                     record = {
-                        'student_id':   row[4],   # ← 이 줄 추가!
+                        'student_id':   row[2],
                         'student_num':  row[3],
-                        'student_name': row[5],
-                        'summary':      row[6] if len(row) > 6 else '',
-                        'problem':      row[7] if len(row) > 7 else '',
-                        'career':       row[8] if len(row) > 8 else '',
-                        'deeplearn':    row[9] if len(row) > 9 else '',
-                        'peer':         row[10] if len(row) > 10 else '',
+                        'student_name': row[4] if len(row) > 4 else '',
+                        'summary':      row[5] if len(row) > 5 else '',
+                        'problem':      row[6] if len(row) > 6 else '',
+                        'career':       row[7] if len(row) > 7 else '',
+                        'deeplearn':    row[8] if len(row) > 8 else '',
+                        'peer':         row[9] if len(row) > 9 else '',
                     }
                     break
             if not record:
@@ -484,16 +487,17 @@ def student_summary(request, student_id):
         student_records = []
         student_name = ''
         for row in records[1:]:
-            if len(row) >= 5 and row[4] == student_id:
-                student_name = row[5] if len(row) > 5 else ''
+            # 실제 시트: [2]=학번, [4]=이름
+            if len(row) >= 3 and row[2] == student_id:
+                student_name = row[4] if len(row) > 4 else ''
                 student_records.append({
                     'date':         row[0],
                     'lesson_title': row[1],
-                    'summary':      row[6] if len(row) > 6 else '',
-                    'problem':      row[7] if len(row) > 7 else '',
-                    'career':       row[8] if len(row) > 8 else '',
-                    'deeplearn':    row[9] if len(row) > 9 else '',
-                    'peer':         row[10] if len(row) > 10 else '',
+                    'summary':      row[5] if len(row) > 5 else '',
+                    'problem':      row[6] if len(row) > 6 else '',
+                    'career':       row[7] if len(row) > 7 else '',
+                    'deeplearn':    row[8] if len(row) > 8 else '',
+                    'peer':         row[9] if len(row) > 9 else '',
                 })
     except Exception as e:
         student_records = []
@@ -1062,21 +1066,21 @@ def teacher_dashboard(request):
         today_str = datetime.now().strftime('%Y-%m-%d')
 
         # 반별 차시별 제출자 수
+        # 실제 시트: [1]=수업명, [2]=학번
         class_lesson_students = defaultdict(lambda: defaultdict(set))
         for row in data_rows:
-            if len(row) < 5:
+            if len(row) < 3:
                 continue
-            lesson_id_str = row[2]
-            student_id_val = row[4]
-            if not lesson_id_str or not student_id_val:
+            title          = row[1]
+            student_id_val = row[2]
+            if not title or not student_id_val:
                 continue
-            try:
-                lid = int(lesson_id_str)
-                prefix = lid // 100
-                class_name = prefix_map.get(prefix, '기타')
-                class_lesson_students[class_name][lid].add(student_id_val)
-            except Exception:
+            lesson_obj = _TITLE_TO_LESSON.get(title)
+            if not lesson_obj:
                 continue
+            lid        = lesson_obj['id']
+            class_name = lesson_obj['class']
+            class_lesson_students[class_name][lid].add(student_id_val)
 
         # 반별로 최근 차시 현황 정리
         today_dt = datetime.now().date()
@@ -1212,7 +1216,45 @@ def teacher_grade_student(request, quizset_id, lesson_id, student_id):
 #  학생 피드백 데이터 리포트  (Report System)
 # ═══════════════════════════════════════════════════════════════
 
-# 반 이름 매핑 (lesson_id 앞자리로 판단)
+# ── 구글 시트 실제 컬럼 레이아웃 ──────────────────────────────────
+# [0] 날짜  [1] 수업명  [2] 학번(student_id)  [3] 번호(student_num)
+# [4] 이름  [5] 핵심개념  [6] 문제해결  [7] 진로연결  [8] 심화학습  [9] 칭찬
+
+# 수업명에서 반 이름 파싱: "8반 - 3차시" → "8반"
+_CLASS_NAME_TO_CODE = {
+    '8반': '108', '9반': '109', '10반': '110',
+    '11반': '111', '12반': '112', '13반': '113',
+}
+
+def _class_from_title(title):
+    """수업명 문자열에서 반 이름 반환. 예: '8반 - 3차시' → '8반'"""
+    for name in _CLASS_NAME_TO_CODE:
+        if name in title:
+            return name
+    return '알 수 없음'
+
+def _class_code_from_title(title):
+    """수업명에서 반 코드 반환. 예: '13반 - 11차시' → '113'"""
+    for name, code in _CLASS_NAME_TO_CODE.items():
+        if name in title:
+            return code
+    return None
+
+def _expected_student_id_by_code(class_code, student_num):
+    """반 코드 + 번호로 올바른 학번 계산. 예: '113', '29' → '11329'"""
+    try:
+        if not class_code:
+            return None
+        num_int = int(str(student_num).strip())
+        expected = f'{class_code}{num_int:02d}'
+        return expected if expected in _VALID_IDS else None
+    except Exception:
+        return None
+
+# 수업명 → Lesson 객체 빠른 조회 딕셔너리
+_TITLE_TO_LESSON = {l['title']: l for l in LESSONS}
+
+# (하위 호환) lesson_id 기반 반 이름 반환
 def _class_from_lesson_id(lesson_id):
     try:
         lid = int(lesson_id)
@@ -1238,26 +1280,26 @@ def teacher_report(request):
         data_rows = rows[1:] if len(rows) > 1 else []
 
         # 학생별로 집계
+        # 실제 시트: [0]=날짜 [1]=수업명 [2]=학번 [3]=번호 [4]=이름 [5..9]=피드백
         student_map = {}  # student_id → dict
         for row in data_rows:
-            if len(row) < 6:
+            if len(row) < 3:
                 continue
             date      = row[0] if len(row) > 0 else ''
             title     = row[1] if len(row) > 1 else ''
-            lesson_id = row[2] if len(row) > 2 else ''
+            s_id      = row[2] if len(row) > 2 else ''
             s_num     = row[3] if len(row) > 3 else ''
-            s_id      = row[4] if len(row) > 4 else ''
-            s_name    = row[5] if len(row) > 5 else ''
-            summary   = row[6] if len(row) > 6 else ''
-            problem   = row[7] if len(row) > 7 else ''
-            career    = row[8] if len(row) > 8 else ''
-            deeplearn = row[9] if len(row) > 9 else ''
-            peer      = row[10] if len(row) > 10 else ''
+            s_name    = row[4] if len(row) > 4 else ''
+            summary   = row[5] if len(row) > 5 else ''
+            problem   = row[6] if len(row) > 6 else ''
+            career    = row[7] if len(row) > 7 else ''
+            deeplearn = row[8] if len(row) > 8 else ''
+            peer      = row[9] if len(row) > 9 else ''
 
             if not s_id:
                 continue
 
-            class_name = _class_from_lesson_id(lesson_id)
+            class_name = _class_from_title(title)
 
             if s_id not in student_map:
                 student_map[s_id] = {
@@ -1326,17 +1368,18 @@ def teacher_report_excel(request):
         data_rows = rows[1:] if len(rows) > 1 else []
 
         # 학생별 집계
+        # 실제 시트: [2]=학번 [3]=번호 [4]=이름 [5..9]=피드백
         student_map = {}
         for row in data_rows:
-            if len(row) < 6:
+            if len(row) < 3:
                 continue
-            s_id   = row[4] if len(row) > 4 else ''
+            s_id   = row[2] if len(row) > 2 else ''
             s_num  = row[3] if len(row) > 3 else ''
-            s_name = row[5] if len(row) > 5 else ''
-            lesson_id = row[2] if len(row) > 2 else ''
+            s_name = row[4] if len(row) > 4 else ''
+            title  = row[1] if len(row) > 1 else ''
             if not s_id:
                 continue
-            class_name = _class_from_lesson_id(lesson_id)
+            class_name = _class_from_title(title)
             if s_id not in student_map:
                 student_map[s_id] = {
                     'class': class_name, 'num': s_num, 'name': s_name,
@@ -1345,11 +1388,11 @@ def teacher_report_excel(request):
             student_map[s_id]['count'] += 1
             student_map[s_id]['submissions'].append({
                 'date':  row[0], 'title': row[1],
-                'summary':   row[6]  if len(row) > 6  else '',
-                'problem':   row[7]  if len(row) > 7  else '',
-                'career':    row[8]  if len(row) > 8  else '',
-                'deeplearn': row[9]  if len(row) > 9  else '',
-                'peer':      row[10] if len(row) > 10 else '',
+                'summary':   row[5] if len(row) > 5 else '',
+                'problem':   row[6] if len(row) > 6 else '',
+                'career':    row[7] if len(row) > 7 else '',
+                'deeplearn': row[8] if len(row) > 8 else '',
+                'peer':      row[9] if len(row) > 9 else '',
             })
 
         wb = openpyxl.Workbook()
@@ -1527,17 +1570,19 @@ def teacher_validate_ids(request):
         data_rows = all_rows[1:] if len(all_rows) > 1 else []
 
         for i, row in enumerate(data_rows, start=2):   # 시트 행 번호 (1=헤더)
-            if len(row) < 5:
+            if len(row) < 3:
                 continue
-            date       = row[0]
-            title      = row[1]
-            lesson_id  = row[2]
-            student_num = row[3]
-            entered_id  = row[4].strip()
-            student_name = row[5] if len(row) > 5 else ''
+            date         = row[0]
+            title        = row[1]
+            entered_id   = row[2].strip()   # C열: 학번
+            student_num  = row[3] if len(row) > 3 else ''  # D열: 번호
+            student_name = row[4] if len(row) > 4 else ''  # E열: 이름
 
+            if not entered_id:
+                continue
             total += 1
-            expected = _expected_student_id(lesson_id, student_num)
+            class_code = _class_code_from_title(title)
+            expected   = _expected_student_id_by_code(class_code, student_num)
 
             if expected is None:
                 status = 'unknown'
@@ -1573,14 +1618,15 @@ def teacher_validate_ids(request):
                 data_rows = all_rows[1:]
                 fixed = 0
                 for i, row in enumerate(data_rows, start=2):
-                    if len(row) < 5:
+                    if len(row) < 3:
                         continue
-                    lesson_id   = row[2]
-                    student_num = row[3]
-                    entered_id  = row[4].strip()
-                    expected    = _expected_student_id(lesson_id, student_num)
+                    title       = row[1]
+                    entered_id  = row[2].strip()  # C열: 학번
+                    student_num = row[3] if len(row) > 3 else ''
+                    class_code  = _class_code_from_title(title)
+                    expected    = _expected_student_id_by_code(class_code, student_num)
                     if expected and entered_id != expected:
-                        sheet.update_cell(i, 5, expected)   # E열 = 학번
+                        sheet.update_cell(i, 3, expected)   # C열(gspread 1-based) = 학번
                         fixed += 1
                 success = f'✓ {fixed}건의 학번이 자동 정정되었습니다.'
                 # 목록 갱신
@@ -1628,17 +1674,17 @@ def teacher_dedup(request):
         header   = all_rows[0] if all_rows else []
         data_rows = all_rows[1:] if len(all_rows) > 1 else []
 
-        # (lesson_id, student_id) → [(sheet_row_index, row_data), ...]
+        # (수업명, 학번) → [(sheet_row_index, row_data), ...]
         from collections import defaultdict
         key_map = defaultdict(list)
         for i, row in enumerate(data_rows, start=2):  # 시트 행 번호 (헤더=1)
-            if len(row) < 5:
+            if len(row) < 3:
                 continue
-            lesson_id  = row[2].strip()
-            student_id = row[4].strip()
-            if not lesson_id or not student_id:
+            title      = row[1].strip()   # B열: 수업명
+            student_id = row[2].strip()   # C열: 학번
+            if not title or not student_id:
                 continue
-            key_map[(lesson_id, student_id)].append((i, row))
+            key_map[(title, student_id)].append((i, row))
 
         # 중복 그룹만 추출
         dup_groups = {k: v for k, v in key_map.items() if len(v) > 1}
@@ -1646,14 +1692,14 @@ def teacher_dedup(request):
         analyzed = True
 
         # 미리보기용 데이터 (최대 20개 그룹)
-        for (lid, sid), rows_list in list(dup_groups.items())[:20]:
+        for (title, sid), rows_list in list(dup_groups.items())[:20]:
             keep = rows_list[-1]
             delete_rows = rows_list[:-1]
             preview_groups.append({
-                'lesson_id':     lid,
+                'lesson_id':     title,           # 수업명으로 표시
                 'student_id':    sid,
-                'student_name':  keep[1][5] if len(keep[1]) > 5 else '',
-                'lesson_title':  keep[1][1] if len(keep[1]) > 1 else '',
+                'student_name':  keep[1][4] if len(keep[1]) > 4 else '',  # E열: 이름
+                'lesson_title':  title,
                 'count':         len(rows_list),
                 'keep_row':      keep[0],
                 'delete_count':  len(delete_rows),
@@ -1674,13 +1720,13 @@ def teacher_dedup(request):
                 from collections import defaultdict
                 key_map = defaultdict(list)
                 for i, row in enumerate(data_rows, start=2):
-                    if len(row) < 5:
+                    if len(row) < 3:
                         continue
-                    lesson_id  = row[2].strip()
-                    student_id = row[4].strip()
-                    if not lesson_id or not student_id:
+                    title      = row[1].strip()  # B열: 수업명
+                    student_id = row[2].strip()  # C열: 학번
+                    if not title or not student_id:
                         continue
-                    key_map[(lesson_id, student_id)].append(i)  # 시트 행 번호만 저장
+                    key_map[(title, student_id)].append(i)  # 시트 행 번호만 저장
 
                 # 삭제할 행 번호 수집 (각 그룹에서 마지막 제외하고 모두)
                 rows_to_delete = []
@@ -1749,13 +1795,17 @@ def teacher_validate_excel(request):
 
         ri = 2
         for row in data_rows:
-            if len(row) < 5:
+            if len(row) < 3:
                 continue
-            lesson_id   = row[2]
-            student_num = row[3]
-            entered_id  = row[4].strip()
-            expected    = _expected_student_id(lesson_id, student_num)
+            title        = row[1]
+            entered_id   = row[2].strip()  # C열: 학번
+            student_num  = row[3] if len(row) > 3 else ''
+            student_name = row[4] if len(row) > 4 else ''
+            class_code   = _class_code_from_title(title)
+            expected     = _expected_student_id_by_code(class_code, student_num)
 
+            if not entered_id:
+                continue
             if expected is None:
                 status, fill = '번호오류', fill_unk
             elif entered_id == expected:
@@ -1764,7 +1814,7 @@ def teacher_validate_excel(request):
                 status, fill = '오류→정정필요', fill_bad
 
             vals = [ri - 1, row[0], row[1], student_num,
-                    row[5] if len(row) > 5 else '',
+                    student_name,
                     entered_id, expected or '확인불가', status]
             for ci, v in enumerate(vals, 1):
                 c = ws.cell(ri, ci, v)
