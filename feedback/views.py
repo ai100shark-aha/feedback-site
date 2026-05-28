@@ -1603,7 +1603,10 @@ def teacher_validate_ids(request):
             if not entered_id:
                 continue
             total += 1
+            # 제목에서 반 코드를 먼저 추출, 없으면 입력 학번 앞 3자리로 판단
             class_code = _class_code_from_title(title)
+            if not class_code and len(entered_id) >= 3 and entered_id[:3] in _CLASS_NAME_TO_CODE.values():
+                class_code = entered_id[:3]
             expected   = _expected_student_id_by_code(class_code, student_num)
 
             if expected is None:
@@ -1646,6 +1649,8 @@ def teacher_validate_ids(request):
                     entered_id  = row[2].strip()  # C열: 학번
                     student_num = row[3] if len(row) > 3 else ''
                     class_code  = _class_code_from_title(title)
+                    if not class_code and len(entered_id) >= 3 and entered_id[:3] in _CLASS_NAME_TO_CODE.values():
+                        class_code = entered_id[:3]
                     expected    = _expected_student_id_by_code(class_code, student_num)
                     if expected and entered_id != expected:
                         sheet.update_cell(i, 3, expected)   # C열(gspread 1-based) = 학번
@@ -1824,6 +1829,8 @@ def teacher_validate_excel(request):
             student_num  = row[3] if len(row) > 3 else ''
             student_name = row[4] if len(row) > 4 else ''
             class_code   = _class_code_from_title(title)
+            if not class_code and len(entered_id) >= 3 and entered_id[:3] in _CLASS_NAME_TO_CODE.values():
+                class_code = entered_id[:3]
             expected     = _expected_student_id_by_code(class_code, student_num)
 
             if not entered_id:

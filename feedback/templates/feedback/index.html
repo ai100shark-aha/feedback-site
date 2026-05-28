@@ -14,9 +14,12 @@
 <body class="bg-light">
 <div class="container py-4" style="max-width:780px">
 
-  <div class="text-center mb-3">
-    <h1 class="h3 fw-bold">📚 제주여고 1학년 정보 수업</h1>
-    <p class="text-muted small">수업 피드백 &amp; 활동문제 채점 시스템</p>
+  <div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+      <h1 class="h3 fw-bold mb-1">📚 제주여고 1학년 정보 수업</h1>
+      <p class="text-muted small mb-0">수업 피드백 &amp; 활동문제 채점 시스템</p>
+    </div>
+    <a href="/teacher/" class="btn btn-outline-dark btn-sm mt-1">🔑 교사 관리</a>
   </div>
 
   <!-- 학번 입력 → 자기 반만 표시 -->
@@ -64,9 +67,6 @@
   </div>
   {% endfor %}
 
-  <div class="text-center mt-4">
-    <a href="/teacher/" class="btn btn-outline-dark btn-sm">🔑 교사 관리</a>
-  </div>
 
 </div>
 
