@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>학번 검증 및 정정</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    thead th { position: sticky; top: 0; background: #2f5496; color: #fff; z-index: 10; }
+    .row-ok      { background: #f0fff4; }
+    .row-wrong   { background: #fff0f0; }
+    .row-unknown { background: #fffbf0; }
+    .badge-ok    { background: #28a745; }
+    .badge-wrong { background: #dc3545; }
+    .badge-unk   { background: #ffc107; color: #333; }
+    .arrow { color: #dc3545; font-weight: bold; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container-fluid py-3" style="max-width: 1050px">
+
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div>
+      <a href="/teacher/" class="btn btn-outline-secondary btn-sm me-1">← 대시보드</a>
+      <span class="fw-bold fs-5">🔍 학번 검증 및 자동 정정</span>
+    </div>
+    <div class="d-flex gap-2 flex-wrap">
+      <a href="/teacher/validate/excel/" class="btn btn-success btn-sm">📥 결과 엑셀 다운로드</a>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+  {% if success %}
+  <div class="alert alert-success fw-bold">{{ success }}</div>
+  {% endif %}
+
+  <!-- 요약 카드 -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-3">
+      <div class="card text-center shadow-sm">
+        <div class="card-body py-2">
+          <div class="h3 mb-0">{{ total }}</div>
+          <div class="small text-muted">전체 제출</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card text-center shadow-sm border-success">
+        <div class="card-body py-2">
+          <div class="h3 mb-0 text-success">{{ ok }}</div>
+          <div class="small text-muted">정상</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card text-center shadow-sm border-danger">
+        <div class="card-body py-2">
+          <div class="h3 mb-0 text-danger">{{ wrong }}</div>
+          <div class="small text-muted">학번 오류</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card text-center shadow-sm border-warning">
+        <div class="card-body py-2">
+          <div class="h3 mb-0 text-warning">{{ unknown }}</div>
+          <div class="small text-muted">번호 오류</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if wrong > 0 %}
+  <!-- 자동 정정 버튼 -->
+  <div class="card border-danger shadow-sm mb-4">
+    <div class="card-body d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div>
+        <strong class="text-danger">⚠️ {{ wrong }}건의 학번 오류 감지</strong>
+        <div class="small text-muted mt-1">
+          번호(자리수)를 기준으로 올바른 학번을 자동 계산하여 구글 시트를 업데이트합니다.<br>
+          <em>정정 전 엑셀로 백업을 권장합니다.</em>
+        </div>
+      </div>
+      <form method="POST">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="fix_all">
+        <button type="submit" class="btn btn-danger"
+                onclick="return confirm('{{ wrong }}건의 학번을 자동 정정하시겠습니까?\n\n오류인 학번을 (반+번호)로 계산한 올바른 학번으로 덮어씁니다.')">
+          🔧 전체 자동 정정 ({{ wrong }}건)
+        </button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-success">✅ 모든 학번이 정상입니다!</div>
+  {% endif %}
+
+  <!-- 탭: 전체 / 오류만 -->
+  <ul class="nav nav-tabs mb-3" id="viewTab" role="tablist">
+    <li class="nav-item">
+      <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-wrong">
+        오류 학번 <span class="badge bg-danger">{{ wrong }}</span>
+      </button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-all">
+        전체 목록 <span class="badge bg-secondary">{{ total }}</span>
+      </button>
+    </li>
+    {% if unknown > 0 %}
+    <li class="nav-item">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-unknown">
+        번호오류 <span class="badge bg-warning text-dark">{{ unknown }}</span>
+      </button>
+    </li>
+    {% endif %}
+  </ul>
+
+  <div class="tab-content">
+
+    <!-- 오류 탭 -->
+    <div class="tab-pane fade show active" id="tab-wrong">
+      {% if wrong_rows %}
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered">
+          <thead>
+            <tr>
+              <th>날짜</th><th>차시</th><th>번호</th><th>이름</th>
+              <th>입력한 학번</th><th></th><th>정확한 학번</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in wrong_rows %}
+            <tr class="row-wrong">
+              <td>{{ r.date|truncatechars:16 }}</td>
+              <td class="small">{{ r.title }}</td>
+              <td class="text-center">{{ r.student_num }}</td>
+              <td class="fw-bold">{{ r.student_name }}</td>
+              <td class="text-danger fw-bold">{{ r.entered_id }}</td>
+              <td class="text-center arrow">→</td>
+              <td class="text-success fw-bold">{{ r.expected_id }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-success">오류 학번이 없습니다.</div>
+      {% endif %}
+    </div>
+
+    <!-- 전체 탭 -->
+    <div class="tab-pane fade" id="tab-all">
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered">
+          <thead>
+            <tr>
+              <th>날짜</th><th>차시</th><th>번호</th><th>이름</th>
+              <th>입력한 학번</th><th>정확한 학번</th><th>상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in rows_info %}
+            <tr class="row-{{ r.status }}">
+              <td>{{ r.date|truncatechars:16 }}</td>
+              <td class="small">{{ r.title }}</td>
+              <td class="text-center">{{ r.student_num }}</td>
+              <td class="fw-bold">{{ r.student_name }}</td>
+              <td class="{% if r.status == 'wrong' %}text-danger fw-bold{% endif %}">
+                {{ r.entered_id }}</td>
+              <td class="{% if r.status == 'ok' %}text-success{% endif %}">
+                {{ r.expected_id }}</td>
+              <td class="text-center">
+                {% if r.status == 'ok' %}
+                  <span class="badge badge-ok">정상</span>
+                {% elif r.status == 'wrong' %}
+                  <span class="badge badge-wrong">오류</span>
+                {% else %}
+                  <span class="badge badge-unk">번호오류</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 번호오류 탭 -->
+    {% if unknown > 0 %}
+    <div class="tab-pane fade" id="tab-unknown">
+      <div class="alert alert-warning">
+        <strong>번호 오류</strong>란 학생이 <em>반 내 번호</em>도 잘못 입력한 경우입니다.
+        이 경우 자동 계산이 불가하여 수동으로 확인해야 합니다.
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-bordered">
+          <thead>
+            <tr>
+              <th>날짜</th><th>차시</th><th>입력번호</th><th>이름</th><th>입력학번</th></tr>
+          </thead>
+          <tbody>
+            {% for r in unknown_rows %}
+            <tr class="row-unknown">
+              <td>{{ r.date|truncatechars:16 }}</td>
+              <td class="small">{{ r.title }}</td>
+              <td class="text-center text-danger fw-bold">{{ r.student_num }}</td>
+              <td class="fw-bold">{{ r.student_name }}</td>
+              <td class="text-danger">{{ r.entered_id }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+  </div><!-- tab-content -->
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

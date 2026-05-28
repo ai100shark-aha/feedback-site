@@ -657,7 +657,7 @@ def _grade_with_claude(q_content, model_answer, ans_text, ans_code, ans_img_b64,
 # ── View: 교사 – 지도서 1회 업로드 ──────────────────────────────────
 
 def guide_upload(request):
-    """교사용: 지도서 PDF를 1회 업로드해서 전체 텍스트 저장"""
+    """교사용: 지도서 텍스트를 입력받아 저장 (텍스트 전용 – PDF 업로드 제거)"""
     error = success = None
     guides = GuideBook.objects.all().order_by('-uploaded_at')
 
@@ -667,39 +667,23 @@ def guide_upload(request):
             error = '비밀번호가 올바르지 않습니다.'
         else:
             name        = request.POST.get('guide_name', '').strip() or '정보 교과 지도서'
-            pdf_file    = request.FILES.get('guide_pdf')
             manual_text = request.POST.get('manual_text', '').strip()
 
-            if not pdf_file and not manual_text:
-                error = 'PDF 파일 또는 텍스트 직접 입력 중 하나는 필수입니다.'
+            if not manual_text:
+                error = '지도서 내용을 입력해주세요.'
+            elif len(manual_text) < 50:
+                error = '내용이 너무 짧습니다. 지도서 내용을 더 많이 입력해주세요.'
             else:
                 try:
-                    full_text = ''
-                    page_count = 0
-                    if pdf_file:
-                        pdf_bytes = pdf_file.read()
-                        full_text = _extract_text_from_pdf(pdf_bytes)
-                        # 페이지 수 파악
-                        try:
-                            import pdfplumber, io as _io
-                            with pdfplumber.open(_io.BytesIO(pdf_bytes)) as pdf:
-                                page_count = len(pdf.pages)
-                        except Exception:
-                            pass
-                    if len(full_text) < 100 and manual_text:
-                        full_text = manual_text
-                    if len(full_text) < 100:
-                        error = 'PDF에서 텍스트를 추출하지 못했습니다. 직접 입력란을 사용해 주세요.'
-                    else:
-                        gb = GuideBook.objects.create(
-                            name=name,
-                            full_text=full_text,
-                            page_count=page_count,
-                        )
-                        success = f'✓ 지도서 [{gb.name}] 저장 완료! ({page_count}페이지, {len(full_text):,}자)'
-                        guides = GuideBook.objects.all().order_by('-uploaded_at')
+                    gb = GuideBook.objects.create(
+                        name=name,
+                        full_text=manual_text,
+                        page_count=0,
+                    )
+                    success = f'✓ 지도서 [{gb.name}] 저장 완료! ({len(manual_text):,}자)'
+                    guides = GuideBook.objects.all().order_by('-uploaded_at')
                 except Exception as e:
-                    error = f'처리 중 오류: {e}'
+                    error = f'저장 중 오류: {e}'
 
     return render(request, 'feedback/guide_upload.html', {
         'error': error, 'success': success, 'guides': guides,
@@ -1492,5 +1476,211 @@ def teacher_report_excel(request):
 
     except ImportError:
         return HttpResponse('openpyxl 패키지가 필요합니다. requirements.txt 확인 후 재배포하세요.', status=500)
+    except Exception as e:
+        return HttpResponse(f'오류: {e}', status=500)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  학번 검증 및 정정 시스템  (Student ID Validation)
+# ═══════════════════════════════════════════════════════════════
+
+# CSV에서 추출한 실제 유효 학번 집합
+_VALID_IDS = set(
+    f'{cls}{num:02d}'
+    for cls, count in [('108', 30), ('109', 30), ('110', 30),
+                       ('111', 30), ('112', 29), ('113', 29)]
+    for num in range(1, count + 1)
+)
+
+# lesson_id 앞자리 → 반 코드 매핑
+_LESSON_CLASS_CODE = {1: '108', 2: '109', 3: '110', 4: '111', 5: '112', 6: '113'}
+_CLASS_CODE_NAME   = {'108': '8반', '109': '9반', '110': '10반',
+                      '111': '11반', '112': '12반', '113': '13반'}
+
+
+def _expected_student_id(lesson_id, student_num):
+    """lesson_id + 번호로 올바른 학번 계산.  예) lesson_id=103, num='15' → '10815'"""
+    try:
+        prefix = int(lesson_id) // 100
+        code   = _LESSON_CLASS_CODE.get(prefix)
+        if not code:
+            return None
+        num_int = int(str(student_num).strip())
+        expected = f'{code}{num_int:02d}'
+        return expected if expected in _VALID_IDS else None
+    except Exception:
+        return None
+
+
+def teacher_validate_ids(request):
+    """교사용: 구글 시트 학번 검증 및 정정 페이지"""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+
+    error = success = None
+    rows_info = []   # 분석 결과
+    total = ok = wrong = unknown = 0
+
+    try:
+        sheet   = get_sheet()
+        all_rows = sheet.get_all_values()
+        data_rows = all_rows[1:] if len(all_rows) > 1 else []
+
+        for i, row in enumerate(data_rows, start=2):   # 시트 행 번호 (1=헤더)
+            if len(row) < 5:
+                continue
+            date       = row[0]
+            title      = row[1]
+            lesson_id  = row[2]
+            student_num = row[3]
+            entered_id  = row[4].strip()
+            student_name = row[5] if len(row) > 5 else ''
+
+            total += 1
+            expected = _expected_student_id(lesson_id, student_num)
+
+            if expected is None:
+                status = 'unknown'
+                unknown += 1
+            elif entered_id == expected:
+                status = 'ok'
+                ok += 1
+            else:
+                status = 'wrong'
+                wrong += 1
+
+            rows_info.append({
+                'row':          i,
+                'date':         date,
+                'title':        title,
+                'student_num':  student_num,
+                'student_name': student_name,
+                'entered_id':   entered_id,
+                'expected_id':  expected or '알 수 없음',
+                'status':       status,
+            })
+
+    except Exception as e:
+        error = f'구글 시트 읽기 오류: {e}'
+
+    # "정정 적용" POST 처리
+    if request.method == 'POST' and not error:
+        action = request.POST.get('action')
+        if action == 'fix_all':
+            try:
+                sheet    = get_sheet()
+                all_rows = sheet.get_all_values()
+                data_rows = all_rows[1:]
+                fixed = 0
+                for i, row in enumerate(data_rows, start=2):
+                    if len(row) < 5:
+                        continue
+                    lesson_id   = row[2]
+                    student_num = row[3]
+                    entered_id  = row[4].strip()
+                    expected    = _expected_student_id(lesson_id, student_num)
+                    if expected and entered_id != expected:
+                        sheet.update_cell(i, 5, expected)   # E열 = 학번
+                        fixed += 1
+                success = f'✓ {fixed}건의 학번이 자동 정정되었습니다.'
+                # 목록 갱신
+                return redirect('/teacher/validate/?fixed=' + str(fixed))
+            except Exception as e:
+                error = f'정정 중 오류: {e}'
+
+    fixed_count = request.GET.get('fixed')
+    if fixed_count:
+        success = f'✓ {fixed_count}건의 학번이 자동 정정되었습니다.'
+
+    wrong_rows   = [r for r in rows_info if r['status'] == 'wrong']
+    unknown_rows = [r for r in rows_info if r['status'] == 'unknown']
+
+    return render(request, 'feedback/teacher_validate.html', {
+        'rows_info':    rows_info,
+        'wrong_rows':   wrong_rows,
+        'unknown_rows': unknown_rows,
+        'total':   total,
+        'ok':      ok,
+        'wrong':   wrong,
+        'unknown': unknown,
+        'error':   error,
+        'success': success,
+    })
+
+
+def teacher_validate_excel(request):
+    """교사용: 학번 검증 결과 엑셀 다운로드"""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+        sheet    = get_sheet()
+        all_rows = sheet.get_all_values()
+        data_rows = all_rows[1:] if len(all_rows) > 1 else []
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '학번정정목록'
+
+        thin = Side(style='thin', color='CCCCCC')
+        brd  = Border(left=thin, right=thin, top=thin, bottom=thin)
+        ctr  = Alignment(horizontal='center', vertical='center')
+        wrap = Alignment(wrap_text=True, vertical='center')
+
+        headers = ['시트행', '날짜', '차시', '번호', '이름', '입력학번', '정확한학번', '상태']
+        fill_hdr = PatternFill('solid', fgColor='2F5496')
+        for ci, h in enumerate(headers, 1):
+            c = ws.cell(1, ci, h)
+            c.font = Font(color='FFFFFF', bold=True)
+            c.fill = fill_hdr
+            c.alignment = ctr
+            c.border = brd
+
+        fill_ok  = PatternFill('solid', fgColor='D6F5D6')
+        fill_bad = PatternFill('solid', fgColor='FFD6D6')
+        fill_unk = PatternFill('solid', fgColor='FFF5D6')
+
+        ri = 2
+        for row in data_rows:
+            if len(row) < 5:
+                continue
+            lesson_id   = row[2]
+            student_num = row[3]
+            entered_id  = row[4].strip()
+            expected    = _expected_student_id(lesson_id, student_num)
+
+            if expected is None:
+                status, fill = '번호오류', fill_unk
+            elif entered_id == expected:
+                status, fill = '정상', fill_ok
+            else:
+                status, fill = '오류→정정필요', fill_bad
+
+            vals = [ri - 1, row[0], row[1], student_num,
+                    row[5] if len(row) > 5 else '',
+                    entered_id, expected or '확인불가', status]
+            for ci, v in enumerate(vals, 1):
+                c = ws.cell(ri, ci, v)
+                c.alignment = ctr if ci != 3 else wrap
+                c.border = brd
+                c.fill = fill
+            ri += 1
+
+        for ci, w in enumerate([7, 18, 22, 7, 10, 12, 12, 14], 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = w
+        ws.row_dimensions[1].height = 22
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        today = datetime.now().strftime('%Y%m%d')
+        response = HttpResponse(
+            buf.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="id_validation_{today}.xlsx"'
+        return response
     except Exception as e:
         return HttpResponse(f'오류: {e}', status=500)
