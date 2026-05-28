@@ -29,4 +29,6 @@ urlpatterns = [
     # ── 학번 검증/정정 ──
     path('teacher/validate/', views.teacher_validate_ids, name='teacher_validate_ids'),
     path('teacher/validate/excel/', views.teacher_validate_excel, name='teacher_validate_excel'),
+    # ── 중복 제거 ──
+    path('teacher/dedup/', views.teacher_dedup, name='teacher_dedup'),
 ]

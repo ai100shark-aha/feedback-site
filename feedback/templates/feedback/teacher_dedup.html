@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>중복 피드백 제거</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    thead th { position: sticky; top: 0; background: #2f5496; color: #fff; z-index: 10; }
+    .group-row { background: #fff8e1; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container-fluid py-3" style="max-width: 900px">
+
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div>
+      <a href="/teacher/" class="btn btn-outline-secondary btn-sm me-1">← 대시보드</a>
+      <span class="fw-bold fs-5">🧹 중복 피드백 제거</span>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+  {% endif %}
+  {% if success %}
+  <div class="alert alert-success fw-bold fs-5">{{ success }}</div>
+  {% endif %}
+
+  <!-- 설명 카드 -->
+  <div class="card shadow-sm mb-4 border-warning">
+    <div class="card-body">
+      <h6 class="fw-bold">⚠️ 작업 안내</h6>
+      <p class="mb-1 small">학생이 저장 버튼을 여러 번 클릭해서 같은 학번·같은 차시로 중복 제출된 행을 정리합니다.</p>
+      <ul class="mb-0 small">
+        <li>기준: <strong>lesson_id (차시) + 학번</strong>이 동일한 행이 여러 개일 때</li>
+        <li>보존: <strong>가장 마지막에 제출된 행</strong> 1개만 남기고 나머지 삭제</li>
+        <li>백업 시트를 미리 만들어 두셨다면 지금 바로 실행하셔도 됩니다.</li>
+      </ul>
+    </div>
+  </div>
+
+  {% if success %}
+  <!-- 완료 후: 돌아가기 버튼 -->
+  <div class="text-center mt-3">
+    <a href="/teacher/" class="btn btn-primary">← 대시보드로 돌아가기</a>
+  </div>
+
+  {% elif analyzed %}
+    {% if total_dups == 0 %}
+    <!-- 중복 없음 -->
+    <div class="alert alert-success fs-5">✅ 중복 데이터가 없습니다! 시트가 깨끗합니다.</div>
+    <div class="text-center mt-3">
+      <a href="/teacher/" class="btn btn-primary">← 대시보드로 돌아가기</a>
+    </div>
+
+    {% else %}
+    <!-- 중복 발견 -->
+    <div class="card border-danger shadow-sm mb-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-3">
+          <div>
+            <strong class="text-danger fs-5">⚠️ 중복 {{ total_dups }}행 발견</strong>
+            <div class="small text-muted mt-1">
+              {{ group_count }}개 그룹에서 중복 확인됨 (미리보기는 최대 20개 그룹 표시)<br>
+              삭제 후에는 되돌릴 수 없으니, <em>백업 시트를 먼저 확인</em>해 주세요.
+            </div>
+          </div>
+          <form method="POST">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="dedup_all">
+            <button type="submit" class="btn btn-danger btn-lg"
+                    onclick="return confirm('중복 {{ total_dups }}행을 삭제하시겠습니까?\n\n각 학생별 마지막 제출 기록만 남기고 이전 기록은 모두 삭제됩니다.\n\n백업 시트를 확인하셨나요?')">
+              🗑️ 중복 {{ total_dups }}행 일괄 삭제
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- 중복 그룹 미리보기 -->
+    {% if preview_groups %}
+    <h6 class="fw-bold mb-2">📋 중복 그룹 미리보기 (최대 20개)</h6>
+    <div class="table-responsive">
+      <table class="table table-sm table-bordered">
+        <thead>
+          <tr>
+            <th>차시 ID</th>
+            <th>학번</th>
+            <th>이름</th>
+            <th>차시명</th>
+            <th>총 제출수</th>
+            <th>삭제될 행</th>
+            <th>보존 행(시트 번호)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for g in preview_groups %}
+          <tr class="group-row">
+            <td class="text-center">{{ g.lesson_id }}</td>
+            <td class="fw-bold">{{ g.student_id }}</td>
+            <td>{{ g.student_name }}</td>
+            <td class="small">{{ g.lesson_title }}</td>
+            <td class="text-center">
+              <span class="badge bg-secondary">{{ g.count }}회</span>
+            </td>
+            <td class="text-center text-danger fw-bold">{{ g.delete_count }}행</td>
+            <td class="text-center text-success">{{ g.keep_row }}행</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% endif %}
+  {% endif %}
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

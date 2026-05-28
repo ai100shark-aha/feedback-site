@@ -1608,6 +1608,111 @@ def teacher_validate_ids(request):
     })
 
 
+# ═══════════════════════════════════════════════════════════════
+#  중복 피드백 제거  (Deduplication)
+# ═══════════════════════════════════════════════════════════════
+
+def teacher_dedup(request):
+    """교사용: 구글 시트 main 시트에서 중복 피드백 제거 (같은 lesson_id + student_id 중 마지막만 유지)"""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+
+    error = success = None
+    preview_groups = []   # 중복 그룹 미리보기용
+    total_dups = 0
+    analyzed = False
+
+    try:
+        sheet    = get_sheet()
+        all_rows = sheet.get_all_values()
+        header   = all_rows[0] if all_rows else []
+        data_rows = all_rows[1:] if len(all_rows) > 1 else []
+
+        # (lesson_id, student_id) → [(sheet_row_index, row_data), ...]
+        from collections import defaultdict
+        key_map = defaultdict(list)
+        for i, row in enumerate(data_rows, start=2):  # 시트 행 번호 (헤더=1)
+            if len(row) < 5:
+                continue
+            lesson_id  = row[2].strip()
+            student_id = row[4].strip()
+            if not lesson_id or not student_id:
+                continue
+            key_map[(lesson_id, student_id)].append((i, row))
+
+        # 중복 그룹만 추출
+        dup_groups = {k: v for k, v in key_map.items() if len(v) > 1}
+        total_dups = sum(len(v) - 1 for v in dup_groups.values())  # 삭제될 행 수
+        analyzed = True
+
+        # 미리보기용 데이터 (최대 20개 그룹)
+        for (lid, sid), rows_list in list(dup_groups.items())[:20]:
+            keep = rows_list[-1]
+            delete_rows = rows_list[:-1]
+            preview_groups.append({
+                'lesson_id':     lid,
+                'student_id':    sid,
+                'student_name':  keep[1][5] if len(keep[1]) > 5 else '',
+                'lesson_title':  keep[1][1] if len(keep[1]) > 1 else '',
+                'count':         len(rows_list),
+                'keep_row':      keep[0],
+                'delete_count':  len(delete_rows),
+            })
+
+    except Exception as e:
+        error = f'구글 시트 읽기 오류: {e}'
+
+    # POST: 실제 삭제 실행
+    if request.method == 'POST' and not error:
+        action = request.POST.get('action')
+        if action == 'dedup_all':
+            try:
+                sheet    = get_sheet()
+                all_rows = sheet.get_all_values()
+                data_rows = all_rows[1:] if len(all_rows) > 1 else []
+
+                from collections import defaultdict
+                key_map = defaultdict(list)
+                for i, row in enumerate(data_rows, start=2):
+                    if len(row) < 5:
+                        continue
+                    lesson_id  = row[2].strip()
+                    student_id = row[4].strip()
+                    if not lesson_id or not student_id:
+                        continue
+                    key_map[(lesson_id, student_id)].append(i)  # 시트 행 번호만 저장
+
+                # 삭제할 행 번호 수집 (각 그룹에서 마지막 제외하고 모두)
+                rows_to_delete = []
+                for v in key_map.values():
+                    if len(v) > 1:
+                        rows_to_delete.extend(v[:-1])  # 마지막 행만 보존
+
+                # 행 번호 내림차순으로 정렬하여 삭제 (위에서 삭제하면 인덱스 밀림 방지)
+                rows_to_delete.sort(reverse=True)
+                deleted = len(rows_to_delete)
+
+                for row_num in rows_to_delete:
+                    sheet.delete_rows(row_num)
+
+                success = f'✓ {deleted}개의 중복 행이 삭제되었습니다. (각 학생별 마지막 제출 기록 보존)'
+                # 분석 데이터 초기화
+                preview_groups = []
+                total_dups = 0
+
+            except Exception as e:
+                error = f'삭제 중 오류: {e}'
+
+    return render(request, 'feedback/teacher_dedup.html', {
+        'error':          error,
+        'success':        success,
+        'preview_groups': preview_groups,
+        'total_dups':     total_dups,
+        'analyzed':       analyzed,
+        'group_count':    len(preview_groups),
+    })
+
+
 def teacher_validate_excel(request):
     """교사용: 학번 검증 결과 엑셀 다운로드"""
     if not request.session.get('teacher_auth'):
