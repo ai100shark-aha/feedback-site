@@ -311,6 +311,28 @@ def feedback_create(request, lesson_id):
                 'is_edit': False,
             })
 
+        # ── 반 검증: 학번 앞 3자리와 수업 반이 일치하는지 확인 ──
+        if student_id in _VALID_IDS:
+            student_class_code = student_id[:3]
+            lesson_class_code  = _LESSON_CLASS_CODE.get(lesson_id // 100)
+            if lesson_class_code and student_class_code != lesson_class_code:
+                # 올바른 차시 계산 (같은 차시, 본인 반)
+                chapter_num    = lesson_id % 100
+                correct_prefix = next(
+                    (k for k, v in _LESSON_CLASS_CODE.items() if v == student_class_code), None
+                )
+                correct_lesson_id = (correct_prefix * 100 + chapter_num) if correct_prefix else None
+                return render(request, 'feedback/create.html', {
+                    'lesson': lesson,
+                    'class_error': True,
+                    'student_class_name': _CLASS_CODE_NAME.get(student_class_code, ''),
+                    'lesson_class_name':  _CLASS_CODE_NAME.get(lesson_class_code, ''),
+                    'correct_lesson_id':  correct_lesson_id,
+                    'chapter_num': chapter_num,
+                    'prev': request.POST,
+                    'is_edit': False,
+                })
+
         # 최소 글자수 검증
         if any(len(x) < 2 for x in [summary, problem, career, deeplearn, peer]):
             return render(request, 'feedback/create.html', {

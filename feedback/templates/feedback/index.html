@@ -14,13 +14,27 @@
 <body class="bg-light">
 <div class="container py-4" style="max-width:780px">
 
-  <div class="text-center mb-4">
+  <div class="text-center mb-3">
     <h1 class="h3 fw-bold">📚 제주여고 1학년 정보 수업</h1>
-    <p class="text-muted small">수업 피드백 &amp; 활동문제 채점 시스템 — 반을 선택하세요</p>
+    <p class="text-muted small">수업 피드백 &amp; 활동문제 채점 시스템</p>
+  </div>
+
+  <!-- 학번 입력 → 자기 반만 표시 -->
+  <div class="card shadow-sm mb-4 border-primary">
+    <div class="card-body py-2">
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <span class="fw-bold text-primary small">🔍 내 반 찾기</span>
+        <input type="text" id="student-id-filter" class="form-control form-control-sm"
+               style="max-width:140px" maxlength="5"
+               placeholder="학번 입력 (예: 10801)" autocomplete="off">
+        <button class="btn btn-outline-secondary btn-sm" onclick="resetFilter()">전체 보기</button>
+        <span id="filter-msg" class="text-primary fw-bold small"></span>
+      </div>
+    </div>
   </div>
 
   {% for class_name, class_lessons in lessons_by_class.items %}
-  <div class="mb-4">
+  <div class="mb-4 class-section" data-class="{{ class_name }}">
     <h5 class="fw-bold border-bottom pb-1 mb-2">{{ class_name }}</h5>
     <div class="row g-2">
       {% for lesson in class_lessons %}
@@ -55,5 +69,46 @@
   </div>
 
 </div>
+
+<script>
+const CLASS_MAP = {
+  '108': '8반', '109': '9반', '110': '10반',
+  '111': '11반', '112': '12반', '113': '13반'
+};
+
+document.getElementById('student-id-filter').addEventListener('input', function() {
+  const sid = this.value.trim();
+  const sections = document.querySelectorAll('.class-section');
+  const msg = document.getElementById('filter-msg');
+
+  if (sid.length < 3) {
+    sections.forEach(s => s.style.display = '');
+    msg.textContent = '';
+    return;
+  }
+
+  const prefix = sid.substring(0, 3);
+  const myClass = CLASS_MAP[prefix];
+
+  if (!myClass) {
+    msg.textContent = '⚠ 올바른 학번을 입력해주세요';
+    msg.className = 'text-danger fw-bold small';
+    sections.forEach(s => s.style.display = '');
+    return;
+  }
+
+  sections.forEach(s => {
+    s.style.display = (s.dataset.class === myClass) ? '' : 'none';
+  });
+  msg.textContent = myClass + ' 수업만 표시 중';
+  msg.className = 'text-primary fw-bold small';
+});
+
+function resetFilter() {
+  document.getElementById('student-id-filter').value = '';
+  document.querySelectorAll('.class-section').forEach(s => s.style.display = '');
+  document.getElementById('filter-msg').textContent = '';
+}
+</script>
 </body>
 </html>

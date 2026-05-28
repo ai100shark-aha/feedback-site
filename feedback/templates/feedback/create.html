@@ -13,7 +13,26 @@
     <p class="text-muted small">수업 종료 1분 전 — 솔직하게 작성해주세요 :)</p>
   </div>
 
-  {% if error %}
+  {% if class_error %}
+  <div class="alert alert-danger border-danger shadow-sm">
+    <h5 class="fw-bold">⚠️ 잘못된 수업 링크입니다!</h5>
+    <p class="mb-2">
+      학번 <strong>{{ prev.student_id }}</strong>은(는)
+      <strong>{{ student_class_name }}</strong> 학생인데,
+      <strong>{{ lesson_class_name }}</strong> 수업 링크를 클릭했습니다.
+    </p>
+    {% if correct_lesson_id %}
+    <a href="/write/{{ correct_lesson_id }}/" class="btn btn-danger">
+      → 내 반({{ student_class_name }}) {{ chapter_num }}차시 피드백 작성하기
+    </a>
+    {% else %}
+    <p class="text-muted small">올바른 수업 링크를 찾을 수 없습니다. 선생님께 문의하세요.</p>
+    {% endif %}
+    <div class="mt-2">
+      <a href="/" class="btn btn-outline-secondary btn-sm">목록으로 돌아가기</a>
+    </div>
+  </div>
+  {% elif error %}
   <div class="alert alert-danger">{{ error }}</div>
   {% endif %}
 
