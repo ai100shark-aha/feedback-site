@@ -1255,6 +1255,13 @@ def _class_from_title(title):
             return name
     return '알 수 없음'
 
+_CODE_TO_CLASS_NAME = {v: k for k, v in _CLASS_NAME_TO_CODE.items()}
+
+def _class_from_student_id(student_id):
+    """학번 앞 3자리로 반 이름 반환. 예: '11224' → '12반'"""
+    code = str(student_id).strip()[:3]
+    return _CODE_TO_CLASS_NAME.get(code, '알 수 없음')
+
 def _class_code_from_title(title):
     """수업명에서 반 코드 반환. 예: '13반 - 11차시' → '113'"""
     for name, code in _CLASS_NAME_TO_CODE.items():
@@ -1321,7 +1328,7 @@ def teacher_report(request):
             if not s_id:
                 continue
 
-            class_name = _class_from_title(title)
+            class_name = _class_from_student_id(s_id)
 
             if s_id not in student_map:
                 student_map[s_id] = {
@@ -1401,7 +1408,7 @@ def teacher_report_excel(request):
             title  = row[1] if len(row) > 1 else ''
             if not s_id:
                 continue
-            class_name = _class_from_title(title)
+            class_name = _class_from_student_id(s_id)
             if s_id not in student_map:
                 student_map[s_id] = {
                     'class': class_name, 'num': s_num, 'name': s_name,
