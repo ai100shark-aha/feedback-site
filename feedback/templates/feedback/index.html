@@ -28,8 +28,9 @@
       <div class="d-flex align-items-center gap-2 flex-wrap">
         <span class="fw-bold text-primary small">🔍 내 반 찾기</span>
         <input type="text" id="student-id-filter" class="form-control form-control-sm"
-               style="max-width:140px" maxlength="5"
-               placeholder="학번 입력 (예: 10801)" autocomplete="off">
+               style="max-width:210px" maxlength="5" inputmode="numeric" pattern="\d{5}"
+               placeholder="학번 5자리 입력 (예: 10113)" autocomplete="off">
+        <span class="text-muted" style="font-size:11px">학년+반+번호 → 1학년 1반 13번 = 10113</span>
         <button class="btn btn-outline-secondary btn-sm" onclick="resetFilter()">전체 보기</button>
         <span id="filter-msg" class="text-primary fw-bold small"></span>
       </div>
@@ -72,6 +73,9 @@
 
 <script>
 const CLASS_MAP = {
+  // 2학기 (1~5반)
+  '101': '1반', '102': '2반', '103': '3반', '104': '4반', '105': '5반',
+  // 1학기 (8~13반)
   '108': '8반', '109': '9반', '110': '10반',
   '111': '11반', '112': '12반', '113': '13반'
 };
@@ -91,7 +95,7 @@ document.getElementById('student-id-filter').addEventListener('input', function(
   const myClass = CLASS_MAP[prefix];
 
   if (!myClass) {
-    msg.textContent = '⚠ 올바른 학번을 입력해주세요';
+    msg.textContent = '⚠ 학번은 5자리입니다 (예: 1반 13번 → 10113)';
     msg.className = 'text-danger fw-bold small';
     sections.forEach(s => s.style.display = '');
     return;
