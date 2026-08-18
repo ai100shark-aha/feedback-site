@@ -1181,10 +1181,12 @@ def teacher_dashboard(request):
             # 오늘 이전 차시만 (이미 진행된 수업)
             past_lessons = [l for l in lessons_for_class
                             if l['date'] <= today_str]
-            if not past_lessons:
-                continue
-            # 최근 5차시
-            recent = past_lessons[-5:]
+            if past_lessons:
+                # 최근 5차시
+                recent = past_lessons[-5:]
+            else:
+                # 아직 수업 전인 반: 앞으로의 5차시를 미리 표시
+                recent = lessons_for_class[:5]
             lesson_data = []
             for l in recent:
                 submitted = len(class_lesson_students[class_name].get(l['id'], set()))
@@ -1427,8 +1429,10 @@ def teacher_report(request):
             })
 
         # 반별로 그룹화 → 번호순 정렬
+        def _class_rank(cn):
+            return CLASS_ORDER.index(cn) if cn in CLASS_ORDER else 99
         for s in sorted(student_map.values(),
-                        key=lambda x: (x['class_name'], x['student_num'].zfill(3))):
+                        key=lambda x: (_class_rank(x['class_name']), x['student_num'].zfill(3))):
             cn = s['class_name']
             if cn not in students_by_class:
                 students_by_class[cn] = []
@@ -1445,10 +1449,7 @@ def teacher_report(request):
         'students_by_class': students_by_class,
         'error':             error,
         'filter_class':      filter_class,
-        'all_classes':       list(OrderedDict(
-            (s['class_name'], None)
-            for s in student_map.values()
-        ).keys()) if 'student_map' in dir() else [],
+        'all_classes':       CLASS_ORDER,
     })
 
 
