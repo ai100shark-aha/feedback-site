@@ -270,25 +270,36 @@ LESSONS = [
     {'id': 638, 'title': '13반 - 38차시', 'date': '2026-07-07', 'class': '13반'},
     {'id': 639, 'title': '13반 - 39차시', 'date': '2026-07-09', 'class': '13반'},
 ]
-# ===== 2학기 (1반~5반) 자동 생성: 2026-08-18 ~ 2026-12-14 =====
+# ===== 2학기 (1반~5반) 자동 생성: 2026-08-18 ~ 2026-12-21 =====
 from datetime import date, timedelta
 
 def build_semester2():
     start = date(2026, 8, 18)
-    end   = date(2026, 12, 14)
+    end   = date(2026, 12, 21)
+    # 요일: 월=0, 화=1, 수=2, 목=3, 금=4
     classes = {
-        '1반': {'days': [0, 3, 4], 'base': 1000},  # 월목금
-        '2반': {'days': [0, 1, 3], 'base': 2000},  # 월화목
-        '3반': {'days': [1, 2, 4], 'base': 3000},  # 화수금
+        '1반': {'days': [1, 3, 4], 'base': 1000},  # 화목금
+        '2반': {'days': [0, 1, 4], 'base': 2000},  # 월화금
+        '3반': {'days': [0, 1, 2], 'base': 3000},  # 월화수
         '4반': {'days': [0, 2, 3], 'base': 4000},  # 월수목
-        '5반': {'days': [1, 3, 4], 'base': 5000},  # 화목금
+        '5반': {'days': [0, 2, 3], 'base': 5000},  # 월수목
+    }
+    # 1학년 휴업일·수업결손일 (차시에서 제외)
+    skip = {
+        date(2026, 9, 2), date(2026, 9, 24), date(2026, 9, 25),
+        date(2026, 10, 5), date(2026, 10, 9),
+        date(2026, 10, 13), date(2026, 10, 14), date(2026, 10, 15),
+        date(2026, 10, 20),
+        date(2026, 10, 28), date(2026, 10, 29), date(2026, 10, 30),
+        date(2026, 11, 18), date(2026, 11, 19),
+        date(2026, 12, 15), date(2026, 12, 16), date(2026, 12, 17),
     }
     result = []
     for cname, info in classes.items():
         n = 0
         d = start
         while d <= end:
-            if d.weekday() in info['days']:
+            if d.weekday() in info['days'] and d not in skip:
                 n += 1
                 result.append({
                     'id': info['base'] + n,
