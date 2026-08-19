@@ -1151,8 +1151,7 @@ def teacher_dashboard(request):
         from collections import defaultdict
         import re as _re
         # class_prefix: 1→8반, 2→9반, ...
-        prefix_map = {10:'1반', 20:'2반', 30:'3반', 40:'4반', 50:'5반',
-                      1:'8반', 2:'9반', 3:'10반', 4:'11반', 5:'12반', 6:'13반'}
+        prefix_map = {1:'8반', 2:'9반', 3:'10반', 4:'11반', 5:'12반', 6:'13반'}
 
         # 오늘 날짜 기준 지난 차시 중 반별 최근 5개 제출 현황
         today_str = datetime.now().strftime('%Y-%m-%d')
@@ -1176,17 +1175,15 @@ def teacher_dashboard(request):
 
         # 반별로 최근 차시 현황 정리
         today_dt = datetime.now().date()
-        for class_name in CLASS_ORDER:
+        for class_name in ['8반','9반','10반','11반','12반','13반']:
             lessons_for_class = [l for l in LESSONS if l['class'] == class_name]
             # 오늘 이전 차시만 (이미 진행된 수업)
             past_lessons = [l for l in lessons_for_class
                             if l['date'] <= today_str]
-            if past_lessons:
-                # 최근 5차시
-                recent = past_lessons[-5:]
-            else:
-                # 아직 수업 전인 반: 앞으로의 5차시를 미리 표시
-                recent = lessons_for_class[:5]
+            if not past_lessons:
+                continue
+            # 최근 5차시
+            recent = past_lessons[-5:]
             lesson_data = []
             for l in recent:
                 submitted = len(class_lesson_students[class_name].get(l['id'], set()))
@@ -1316,22 +1313,14 @@ def teacher_grade_student(request, quizset_id, lesson_id, student_id):
 
 # 수업명에서 반 이름 파싱: "8반 - 3차시" → "8반"
 _CLASS_NAME_TO_CODE = {
-    # 2학기 (1~5반)
-    '1반': '101', '2반': '102', '3반': '103', '4반': '104', '5반': '105',
-    # 1학기 (8~13반)
     '8반': '108', '9반': '109', '10반': '110',
     '11반': '111', '12반': '112', '13반': '113',
 }
-# 화면 표시 순서: 2학기(1~5반) → 1학기(8~13반)
-CLASS_ORDER = ['1반', '2반', '3반', '4반', '5반',
-               '8반', '9반', '10반', '11반', '12반', '13반']
 
 def _class_from_title(title):
-    """수업명 문자열에서 반 이름 반환. 예: '8반 - 3차시' → '8반'  ('1반' in '11반' 오판 방지용 정규식)"""
-    m = re.match(r'\s*(\d+)반', str(title))
-    if m:
-        name = f"{int(m.group(1))}반"
-        if name in _CLASS_NAME_TO_CODE:
+    """수업명 문자열에서 반 이름 반환. 예: '8반 - 3차시' → '8반'"""
+    for name in _CLASS_NAME_TO_CODE:
+        if name in title:
             return name
     return '알 수 없음'
 
@@ -1344,7 +1333,10 @@ def _class_from_student_id(student_id):
 
 def _class_code_from_title(title):
     """수업명에서 반 코드 반환. 예: '13반 - 11차시' → '113'"""
-    return _CLASS_NAME_TO_CODE.get(_class_from_title(title))
+    for name, code in _CLASS_NAME_TO_CODE.items():
+        if name in title:
+            return code
+    return None
 
 def _expected_student_id_by_code(class_code, student_num):
     """반 코드 + 번호로 올바른 학번 계산. 예: '113', '29' → '11329'"""
@@ -1365,8 +1357,7 @@ def _class_from_lesson_id(lesson_id):
     try:
         lid = int(lesson_id)
         prefix = lid // 100
-        mapping = {10: '1반', 20: '2반', 30: '3반', 40: '4반', 50: '5반',
-                   1: '8반', 2: '9반', 3: '10반', 4: '11반', 5: '12반', 6: '13반'}
+        mapping = {1: '8반', 2: '9반', 3: '10반', 4: '11반', 5: '12반', 6: '13반'}
         return mapping.get(prefix, f'기타({lid})')
     except Exception:
         return '알 수 없음'
@@ -1429,10 +1420,8 @@ def teacher_report(request):
             })
 
         # 반별로 그룹화 → 번호순 정렬
-        def _class_rank(cn):
-            return CLASS_ORDER.index(cn) if cn in CLASS_ORDER else 99
         for s in sorted(student_map.values(),
-                        key=lambda x: (_class_rank(x['class_name']), x['student_num'].zfill(3))):
+                        key=lambda x: (x['class_name'], x['student_num'].zfill(3))):
             cn = s['class_name']
             if cn not in students_by_class:
                 students_by_class[cn] = []
@@ -1449,7 +1438,10 @@ def teacher_report(request):
         'students_by_class': students_by_class,
         'error':             error,
         'filter_class':      filter_class,
-        'all_classes':       CLASS_ORDER,
+        'all_classes':       list(OrderedDict(
+            (s['class_name'], None)
+            for s in student_map.values()
+        ).keys()) if 'student_map' in dir() else [],
     })
 
 
@@ -1557,7 +1549,7 @@ def teacher_report_excel(request):
         ws_sum.column_dimensions['F'].width = 50
 
         # ── 반별 상세 시트 ──
-        classes_order = CLASS_ORDER
+        classes_order = ['8반', '9반', '10반', '11반', '12반', '13반']
         class_students = {cn: [] for cn in classes_order}
         for sid, s in student_map.items():
             cn = s['class']
@@ -1636,17 +1628,14 @@ def teacher_report_excel(request):
 # CSV에서 추출한 실제 유효 학번 집합
 _VALID_IDS = set(
     f'{cls}{num:02d}'
-    for cls, count in [('101', 30), ('102', 30), ('103', 30), ('104', 30), ('105', 30),
-                       ('108', 30), ('109', 30), ('110', 30),
+    for cls, count in [('108', 30), ('109', 30), ('110', 30),
                        ('111', 30), ('112', 29), ('113', 29)]
     for num in range(1, count + 1)
 )
 
 # lesson_id 앞자리 → 반 코드 매핑
-_LESSON_CLASS_CODE = {10: '101', 20: '102', 30: '103', 40: '104', 50: '105',
-                      1: '108', 2: '109', 3: '110', 4: '111', 5: '112', 6: '113'}
-_CLASS_CODE_NAME   = {'101': '1반', '102': '2반', '103': '3반', '104': '4반', '105': '5반',
-                      '108': '8반', '109': '9반', '110': '10반',
+_LESSON_CLASS_CODE = {1: '108', 2: '109', 3: '110', 4: '111', 5: '112', 6: '113'}
+_CLASS_CODE_NAME   = {'108': '8반', '109': '9반', '110': '10반',
                       '111': '11반', '112': '12반', '113': '13반'}
 
 
