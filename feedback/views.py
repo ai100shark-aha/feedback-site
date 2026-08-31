@@ -318,8 +318,8 @@ import re as _re
 def validate_student(lesson, student_id, student_num, student_name):
     if not _re.fullmatch(r'\d{5}', student_id):
         return '학번은 숫자 5자리로 입력해주세요. (예: 10113)'
-    if not student_num.isdigit() or not (1 <= int(student_num) <= 30):
-        return '번호는 1~30 사이 숫자로 입력해주세요.'
+    if not student_num.isdigit() or not (1 <= int(student_num) <= 32):
+        return '번호는 1~32 사이 숫자로 입력해주세요.'
     if int(student_id[3:5]) != int(student_num):
         return f'학번 뒤 2자리({student_id[3:5]})와 번호({student_num})가 일치하지 않습니다.'
     class_num = int(_re.sub(r'[^0-9]', '', lesson['class']))
@@ -1636,7 +1636,7 @@ def teacher_report_excel(request):
 # CSV에서 추출한 실제 유효 학번 집합
 _VALID_IDS = set(
     f'{cls}{num:02d}'
-    for cls, count in [('101', 30), ('102', 30), ('103', 30), ('104', 30), ('105', 30),
+    for cls, count in [('101', 32), ('102', 32), ('103', 32), ('104', 32), ('105', 32),
                        ('108', 30), ('109', 30), ('110', 30),
                        ('111', 30), ('112', 29), ('113', 29)]
     for num in range(1, count + 1)
