@@ -1955,3 +1955,142 @@ def teacher_validate_excel(request):
         return response
     except Exception as e:
         return HttpResponse(f'오류: {e}', status=500)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  워드클라우드 브레인스토밍  (Word Cloud)
+#  - 교사가 질문 등록 → 학생 익명 참여 → 교사 화면에 실시간 표시
+#  - 서버 메모리 저장 (세션 종료 시까지 유지)
+# ═══════════════════════════════════════════════════════════════
+
+import random as _random
+import re as _wc_re
+from django.http import JsonResponse
+
+# 진행 중인 세션들: {코드: {'q': 질문, 'words': [단어...], 'created': datetime}}
+_WC_SESSIONS = {}
+
+
+def _wc_new_code():
+    """중복되지 않는 4자리 참여 코드 생성"""
+    for _ in range(50):
+        c = str(_random.randint(1000, 9999))
+        if c not in _WC_SESSIONS:
+            return c
+    return str(_random.randint(1000, 9999))
+
+
+def _wc_cleanup():
+    """3시간 지난 세션 정리 (메모리 보호)"""
+    now = datetime.now()
+    for c in list(_WC_SESSIONS.keys()):
+        if (now - _WC_SESSIONS[c]['created']).total_seconds() > 10800:
+            del _WC_SESSIONS[c]
+
+
+def _wc_normalize(word):
+    """단어 정리: 공백/특수문자 제거, 길이 제한"""
+    w = _wc_re.sub(r'[\s]+', ' ', str(word)).strip()
+    w = _wc_re.sub(r'[^\w가-힣 ]', '', w)
+    return w[:20]
+
+
+# ── View: 교사 화면 (질문 등록 + 결과 표시) ─────────────────────
+
+def cloud_teacher(request):
+    """교사용 워드클라우드 화면"""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+
+    _wc_cleanup()
+
+    if request.method == 'POST':
+        action = request.POST.get('action', '')
+        code = request.POST.get('code', '')
+
+        if action == 'new':
+            q = request.POST.get('question', '').strip()
+            if q:
+                code = _wc_new_code()
+                _WC_SESSIONS[code] = {'q': q, 'words': [], 'created': datetime.now()}
+                return redirect(f'/cloud/?code={code}')
+
+        elif action == 'clear' and code in _WC_SESSIONS:
+            _WC_SESSIONS[code]['words'] = []
+            return redirect(f'/cloud/?code={code}')
+
+        elif action == 'close' and code in _WC_SESSIONS:
+            del _WC_SESSIONS[code]
+            return redirect('/cloud/')
+
+    code = request.GET.get('code', '').strip()
+    session = _WC_SESSIONS.get(code)
+
+    return render(request, 'feedback/cloud_teacher.html', {
+        'code': code if session else '',
+        'question': session['q'] if session else '',
+        'active': bool(session),
+        'sessions': [{'code': c, 'q': v['q'], 'n': len(v['words'])}
+                     for c, v in sorted(_WC_SESSIONS.items())],
+    })
+
+
+# ── View: 워드클라우드 데이터 (교사 화면이 주기적으로 호출) ──────
+
+def cloud_data(request, code):
+    """단어별 빈도 JSON 반환"""
+    session = _WC_SESSIONS.get(code)
+    if not session:
+        return JsonResponse({'ok': False, 'error': 'no_session'})
+
+    counter = {}
+    for w in session['words']:
+        counter[w] = counter.get(w, 0) + 1
+    items = sorted(counter.items(), key=lambda x: (-x[1], x[0]))
+
+    return JsonResponse({
+        'ok': True,
+        'question': session['q'],
+        'total': len(session['words']),
+        'unique': len(counter),
+        'words': [{'text': t, 'count': n} for t, n in items[:80]],
+    })
+
+
+# ── View: 학생 참여 화면 ────────────────────────────────────────
+
+def cloud_join(request):
+    """학생용 입력 화면 (익명, 무제한 입력)"""
+    _wc_cleanup()
+    code = (request.GET.get('code') or request.POST.get('code') or '').strip()
+
+    if request.method == 'POST':
+        word = _wc_normalize(request.POST.get('word', ''))
+        session = _WC_SESSIONS.get(code)
+        if not session:
+            return render(request, 'feedback/cloud_join.html', {
+                'code': code, 'error': '참여 코드를 다시 확인해주세요.'})
+        if not word:
+            return render(request, 'feedback/cloud_join.html', {
+                'code': code, 'question': session['q'],
+                'error': '단어를 입력해주세요.',
+                'sent': request.session.get('wc_sent_' + code, 0)})
+        if len(session['words']) >= 3000:
+            return render(request, 'feedback/cloud_join.html', {
+                'code': code, 'question': session['q'],
+                'error': '응답이 가득 찼습니다.'})
+
+        session['words'].append(word)
+        n = request.session.get('wc_sent_' + code, 0) + 1
+        request.session['wc_sent_' + code] = n
+        return render(request, 'feedback/cloud_join.html', {
+            'code': code, 'question': session['q'],
+            'success': word, 'sent': n})
+
+    session = _WC_SESSIONS.get(code) if code else None
+    return render(request, 'feedback/cloud_join.html', {
+        'code': code,
+        'question': session['q'] if session else '',
+        'error': '참여 코드를 확인해주세요.' if (code and not session) else '',
+        'sent': request.session.get('wc_sent_' + code, 0) if code else 0,
+    })

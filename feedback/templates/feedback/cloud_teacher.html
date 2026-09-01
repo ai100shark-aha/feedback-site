@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>워드클라우드 — 교사</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background:#fff; }
+    #cloud { width:100%; height:62vh; border-radius:14px; background:#fafbff;
+             border:1px solid #e3e8f5; position:relative; overflow:hidden; }
+    .w { position:absolute; font-weight:800; white-space:nowrap; line-height:1;
+         transform:translate(-50%,-50%); transition:all .5s ease; }
+    .qbig { font-size:30px; font-weight:800; }
+    .codebox { font-size:40px; font-weight:900; letter-spacing:.12em; color:#2f5496; }
+    .joinurl { font-size:19px; font-weight:700; color:#333; }
+  </style>
+</head>
+<body>
+<div class="container-fluid py-3" style="max-width:1200px">
+
+  {% if not active %}
+  <!-- ── 질문 등록 화면 ── -->
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h4 fw-bold mb-0">💭 워드클라우드 브레인스토밍</h1>
+    <a href="/teacher/" class="btn btn-outline-secondary btn-sm">← 교사 관리</a>
+  </div>
+
+  <div class="card shadow-sm mb-4" style="max-width:640px">
+    <div class="card-body">
+      <form method="POST">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="new">
+        <label class="form-label fw-bold">학생들에게 낼 질문</label>
+        <div class="input-group">
+          <input type="text" name="question" class="form-control form-control-lg"
+                 placeholder="예: 후회의 반대말은?" maxlength="80" required autofocus>
+          <button class="btn btn-primary btn-lg">시작하기</button>
+        </div>
+        <div class="form-text">시작하면 참여 코드가 생성됩니다. 학생들에게 코드를 알려주세요.</div>
+      </form>
+    </div>
+  </div>
+
+  {% if sessions %}
+  <h6 class="fw-bold">진행 중인 세션</h6>
+  <div class="list-group" style="max-width:640px">
+    {% for s in sessions %}
+    <a href="/cloud/?code={{ s.code }}" class="list-group-item list-group-item-action d-flex justify-content-between">
+      <span><span class="badge bg-primary me-2">{{ s.code }}</span>{{ s.q }}</span>
+      <span class="text-muted small">{{ s.n }}개 응답</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <!-- ── 결과 표시 화면 ── -->
+  <div class="d-flex justify-content-between align-items-start mb-2 flex-wrap gap-2">
+    <div>
+      <div class="qbig">{{ question }}</div>
+      <div class="text-muted mt-1">
+        <span class="joinurl" id="joinurl"></span>
+        &nbsp;·&nbsp; 참여 코드 <span class="codebox">{{ code }}</span>
+      </div>
+    </div>
+    <div class="text-end">
+      <div><span class="badge bg-primary" style="font-size:15px">응답 <span id="total">0</span>개</span>
+           <span class="badge bg-secondary" style="font-size:15px">단어 <span id="uniq">0</span>종</span></div>
+      <div class="mt-2 d-flex gap-1 justify-content-end">
+        <form method="POST" class="d-inline" onsubmit="return confirm('입력된 단어를 모두 지울까요?');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="clear">
+          <input type="hidden" name="code" value="{{ code }}">
+          <button class="btn btn-outline-warning btn-sm">비우기</button>
+        </form>
+        <form method="POST" class="d-inline" onsubmit="return confirm('세션을 종료할까요? 데이터가 삭제됩니다.');">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="close">
+          <input type="hidden" name="code" value="{{ code }}">
+          <button class="btn btn-outline-danger btn-sm">종료</button>
+        </form>
+        <a href="/cloud/" class="btn btn-outline-secondary btn-sm">목록</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="cloud"></div>
+  <div class="text-muted small mt-2">화면은 2초마다 자동 갱신됩니다.</div>
+
+  <script>
+  document.getElementById('joinurl').textContent = location.origin + '/cloud/join/';
+
+  const PALETTE = ['#2f5496','#c0392b','#1e8449','#8e44ad','#d35400',
+                   '#16a085','#2c3e50','#b7950b','#a93226','#117864'];
+  const box = document.getElementById('cloud');
+  let prev = '';
+
+  function layout(words) {
+    const W = box.clientWidth, H = box.clientHeight;
+    box.innerHTML = '';
+    if (!words.length) {
+      box.innerHTML = '<div class="d-flex h-100 align-items-center justify-content-center text-muted">' +
+                      '학생들의 응답을 기다리는 중…</div>';
+      return;
+    }
+    const max = words[0].count, min = words[words.length-1].count;
+    const placed = [];
+    words.forEach((w, i) => {
+      const ratio = max === min ? 1 : (w.count - min) / (max - min);
+      let size = Math.round(18 + ratio * Math.min(76, 300 / Math.max(4, w.text.length)));
+      if (w.count > 1) size += 4;
+      const el = document.createElement('span');
+      el.className = 'w';
+      el.textContent = w.text;
+      el.style.fontSize = size + 'px';
+      el.style.color = PALETTE[i % PALETTE.length];
+      el.title = w.count + '회';
+      box.appendChild(el);
+
+      // 나선형으로 빈 자리 찾기
+      const ew = el.offsetWidth, eh = el.offsetHeight;
+      let x = W/2, y = H/2, ok = false;
+      for (let t = 0; t < 900; t++) {
+        const ang = t * 0.4, rad = 3 + t * 1.1;
+        x = W/2 + rad * Math.cos(ang) * 1.5;
+        y = H/2 + rad * Math.sin(ang) * 0.75;
+        if (x - ew/2 < 4 || x + ew/2 > W-4 || y - eh/2 < 4 || y + eh/2 > H-4) continue;
+        ok = true;
+        for (const p of placed) {
+          if (Math.abs(x - p.x) < (ew + p.w)/2 + 8 &&
+              Math.abs(y - p.y) < (eh + p.h)/2 + 6) { ok = false; break; }
+        }
+        if (ok) break;
+      }
+      if (!ok) { el.remove(); return; }
+      el.style.left = x + 'px';
+      el.style.top  = y + 'px';
+      placed.push({x:x, y:y, w:ew, h:eh});
+    });
+  }
+
+  async function tick() {
+    try {
+      const r = await fetch('/cloud/data/{{ code }}/');
+      const d = await r.json();
+      if (!d.ok) return;
+      document.getElementById('total').textContent = d.total;
+      document.getElementById('uniq').textContent  = d.unique;
+      const sig = JSON.stringify(d.words);
+      if (sig !== prev) { prev = sig; layout(d.words); }
+    } catch (e) {}
+  }
+  tick();
+  setInterval(tick, 2000);
+  window.addEventListener('resize', () => { prev = ''; tick(); });
+  </script>
+  {% endif %}
+
+</div>
+</body>
+</html>

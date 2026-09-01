@@ -31,4 +31,8 @@ urlpatterns = [
     path('teacher/validate/excel/', views.teacher_validate_excel, name='teacher_validate_excel'),
     # ── 중복 제거 ──
     path('teacher/dedup/', views.teacher_dedup, name='teacher_dedup'),
+    # ── 워드클라우드 브레인스토밍 ──
+    path('cloud/', views.cloud_teacher, name='cloud_teacher'),          # 교사 화면
+    path('cloud/join/', views.cloud_join, name='cloud_join'),           # 학생 참여
+    path('cloud/data/<str:code>/', views.cloud_data, name='cloud_data'),# 실시간 데이터
 ]
