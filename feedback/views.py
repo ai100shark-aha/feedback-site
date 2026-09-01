@@ -1960,15 +1960,26 @@ def teacher_validate_excel(request):
 # ═══════════════════════════════════════════════════════════════
 #  워드클라우드 브레인스토밍  (Word Cloud)
 #  - 교사가 질문 등록 → 학생 익명 참여 → 교사 화면에 실시간 표시
-#  - 서버 메모리 저장 (세션 종료 시까지 유지)
+#  - 메모리 + 구글 시트 이중 저장 (재시작·슬립 후에도 복구)
+#
+#  ▸ 사용법: views.py 의 기존 워드클라우드 블록 전체를 이 파일로 통째로 교체
+#            (cloud_join 은 이 파일 안에 포함되어 있습니다)
 # ═══════════════════════════════════════════════════════════════
 
 import random as _random
 import re as _wc_re
+import threading as _wc_threading
 from django.http import JsonResponse
 
 # 진행 중인 세션들: {코드: {'q': 질문, 'words': [단어...], 'created': datetime}}
 _WC_SESSIONS = {}
+
+_WC_SHEET_NAME = '워드클라우드'
+
+# 시트에 남기는 상태 표시
+_WC_START = '__START__'      # 세션 시작
+_WC_CLEAR = '__CLEAR__'      # 단어 전체 지움
+_WC_CLOSE = '__CLOSED__'     # 세션 종료
 
 
 def _wc_new_code():
@@ -1981,7 +1992,7 @@ def _wc_new_code():
 
 
 def _wc_cleanup():
-    """3시간 지난 세션 정리 (메모리 보호)"""
+    """3시간 지난 세션은 메모리에서 내림 (시트 기록은 남으므로 복구 가능)"""
     now = datetime.now()
     for c in list(_WC_SESSIONS.keys()):
         if (now - _WC_SESSIONS[c]['created']).total_seconds() > 10800:
@@ -1993,6 +2004,108 @@ def _wc_normalize(word):
     w = _wc_re.sub(r'[\s]+', ' ', str(word)).strip()
     w = _wc_re.sub(r'[^\w가-힣 ]', '', w)
     return w[:20]
+
+
+# ── 구글 시트 연동 ──────────────────────────────────────────────
+
+def _wc_sheet():
+    """워드클라우드 전용 탭 반환. 없으면 헤더까지 만들어서 생성."""
+    ss = get_sheet().spreadsheet          # 기존 인증 로직 그대로 재사용
+    try:
+        return ss.worksheet(_WC_SHEET_NAME)
+    except Exception:
+        ws = ss.add_worksheet(title=_WC_SHEET_NAME, rows=3000, cols=5)
+        ws.append_row(['시각', '코드', '질문', '단어'])
+        return ws
+
+
+def _wc_log(code, question, word):
+    """한 줄 기록. 백그라운드라 학생 응답이 느려지지 않습니다."""
+    def job():
+        try:
+            _wc_sheet().append_row([
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                str(code), str(question), str(word)
+            ])
+        except Exception as e:
+            print(f"워드클라우드 시트 저장 오류: {e}")
+
+    _wc_threading.Thread(target=job, daemon=True).start()
+
+
+def _wc_replay(rows, only_code=None):
+    """
+    시트 기록을 위에서 아래로 재생해 각 코드의 최종 상태를 만든다.
+    {코드: {'q': 질문, 'words': [...], 'closed': bool}}
+    """
+    state = {}
+    for r in rows[1:]:                     # 헤더 건너뛰기
+        if len(r) < 4:
+            continue
+        c, q, w = r[1], r[2], r[3]
+        if only_code and c != only_code:
+            continue
+
+        if w == _WC_START:
+            state[c] = {'q': q, 'words': [], 'closed': False}
+            continue
+
+        s = state.setdefault(c, {'q': q, 'words': [], 'closed': False})
+        if q:
+            s['q'] = q
+
+        if w == _WC_CLEAR:
+            s['words'] = []
+        elif w == _WC_CLOSE:
+            s['closed'] = True
+        elif w:
+            s['words'].append(w)
+    return state
+
+
+def _wc_get(code):
+    """
+    메모리에서 세션을 찾고, 없으면 시트에서 복구한다.
+    시트 읽기는 메모리에 없을 때만 일어나므로 API 호출량은 미미합니다.
+    """
+    code = str(code).strip()
+    if not code:
+        return None
+
+    s = _WC_SESSIONS.get(code)
+    if s:
+        return s
+
+    try:
+        rows = _wc_sheet().get_all_values()
+    except Exception as e:
+        print(f"워드클라우드 시트 복구 오류: {e}")
+        return None
+
+    st = _wc_replay(rows, only_code=code).get(code)
+    if not st or st['closed']:
+        return None
+
+    _WC_SESSIONS[code] = {
+        'q': st['q'],
+        'words': st['words'],
+        'created': datetime.now(),         # 복구 시점 기준으로 타이머 재시작
+    }
+    return _WC_SESSIONS[code]
+
+
+def _wc_list():
+    """교사 화면에 띄울 세션 목록. 메모리 + 시트를 합쳐서 반환."""
+    out = {c: {'code': c, 'q': v['q'], 'n': len(v['words'])}
+           for c, v in _WC_SESSIONS.items()}
+    try:
+        for c, st in _wc_replay(_wc_sheet().get_all_values()).items():
+            if st['closed'] or c in out:
+                continue
+            out[c] = {'code': c, 'q': st['q'], 'n': len(st['words'])}
+    except Exception as e:
+        print(f"워드클라우드 목록 조회 오류: {e}")
+    return [out[c] for c in sorted(out)]
 
 
 # ── View: 교사 화면 (질문 등록 + 결과 표시) ─────────────────────
@@ -2013,25 +2126,71 @@ def cloud_teacher(request):
             if q:
                 code = _wc_new_code()
                 _WC_SESSIONS[code] = {'q': q, 'words': [], 'created': datetime.now()}
+                _wc_log(code, q, _WC_START)
                 return redirect(f'/cloud/?code={code}')
 
-        elif action == 'clear' and code in _WC_SESSIONS:
-            _WC_SESSIONS[code]['words'] = []
-            return redirect(f'/cloud/?code={code}')
+        elif action == 'clear':
+            session = _wc_get(code)
+            if session:
+                session['words'] = []
+                _wc_log(code, session['q'], _WC_CLEAR)
+                return redirect(f'/cloud/?code={code}')
 
-        elif action == 'close' and code in _WC_SESSIONS:
-            del _WC_SESSIONS[code]
-            return redirect('/cloud/')
+        elif action == 'close':
+            session = _wc_get(code)
+            if session:
+                _wc_log(code, session['q'], _WC_CLOSE)
+                _WC_SESSIONS.pop(code, None)
+                return redirect('/cloud/')
 
     code = request.GET.get('code', '').strip()
-    session = _WC_SESSIONS.get(code)
+    session = _wc_get(code) if code else None
 
     return render(request, 'feedback/cloud_teacher.html', {
         'code': code if session else '',
         'question': session['q'] if session else '',
         'active': bool(session),
-        'sessions': [{'code': c, 'q': v['q'], 'n': len(v['words'])}
-                     for c, v in sorted(_WC_SESSIONS.items())],
+        'sessions': _wc_list(),
+    })
+
+
+# ── View: 학생 참여 화면 ────────────────────────────────────────
+
+def cloud_join(request):
+    """학생용 입력 화면 (익명, 무제한 입력)"""
+    _wc_cleanup()
+    code = (request.GET.get('code') or request.POST.get('code') or '').strip()
+
+    if request.method == 'POST':
+        word = _wc_normalize(request.POST.get('word', ''))
+        session = _wc_get(code) if code else None
+        if not session:
+            return render(request, 'feedback/cloud_join.html', {
+                'code': code, 'error': '참여 코드를 다시 확인해주세요.'})
+        if not word:
+            return render(request, 'feedback/cloud_join.html', {
+                'code': code, 'question': session['q'],
+                'error': '단어를 입력해주세요.',
+                'sent': request.session.get('wc_sent_' + code, 0)})
+        if len(session['words']) >= 3000:
+            return render(request, 'feedback/cloud_join.html', {
+                'code': code, 'question': session['q'],
+                'error': '응답이 가득 찼습니다.'})
+
+        session['words'].append(word)
+        _wc_log(code, session['q'], word)
+        n = request.session.get('wc_sent_' + code, 0) + 1
+        request.session['wc_sent_' + code] = n
+        return render(request, 'feedback/cloud_join.html', {
+            'code': code, 'question': session['q'],
+            'success': word, 'sent': n})
+
+    session = _wc_get(code) if code else None
+    return render(request, 'feedback/cloud_join.html', {
+        'code': code,
+        'question': session['q'] if session else '',
+        'error': '참여 코드를 확인해주세요.' if (code and not session) else '',
+        'sent': request.session.get('wc_sent_' + code, 0) if code else 0,
     })
 
 
@@ -2039,7 +2198,7 @@ def cloud_teacher(request):
 
 def cloud_data(request, code):
     """단어별 빈도 JSON 반환"""
-    session = _WC_SESSIONS.get(code)
+    session = _wc_get(code)
     if not session:
         return JsonResponse({'ok': False, 'error': 'no_session'})
 
@@ -2055,8 +2214,6 @@ def cloud_data(request, code):
         'unique': len(counter),
         'words': [{'text': t, 'count': n} for t, n in items[:80]],
     })
-
-
 # ── View: 학생 참여 화면 ────────────────────────────────────────
 
 def cloud_join(request):
@@ -2066,7 +2223,7 @@ def cloud_join(request):
 
     if request.method == 'POST':
         word = _wc_normalize(request.POST.get('word', ''))
-        session = _WC_SESSIONS.get(code)
+        session = _wc_get(code) if code else None
         if not session:
             return render(request, 'feedback/cloud_join.html', {
                 'code': code, 'error': '참여 코드를 다시 확인해주세요.'})
@@ -2081,16 +2238,90 @@ def cloud_join(request):
                 'error': '응답이 가득 찼습니다.'})
 
         session['words'].append(word)
+        _wc_log(code, session['q'], word)
         n = request.session.get('wc_sent_' + code, 0) + 1
         request.session['wc_sent_' + code] = n
         return render(request, 'feedback/cloud_join.html', {
             'code': code, 'question': session['q'],
             'success': word, 'sent': n})
 
-    session = _WC_SESSIONS.get(code) if code else None
+    session = _wc_get(code) if code else None
     return render(request, 'feedback/cloud_join.html', {
         'code': code,
         'question': session['q'] if session else '',
         'error': '참여 코드를 확인해주세요.' if (code and not session) else '',
         'sent': request.session.get('wc_sent_' + code, 0) if code else 0,
     })
+# ═══════════════════════════════════════════════════════════════
+#  워드클라우드 — 구글 시트 영구 기록 + 세션 복구
+#  views.py 맨 아래에 그대로 붙여넣기
+#  (기존 get_sheet() / _WC_SESSIONS 를 그대로 재사용합니다)
+# ═══════════════════════════════════════════════════════════════
+
+import threading as _wc_threading
+
+_WC_SHEET_NAME = '워드클라우드'
+
+
+def _wc_sheet():
+    """워드클라우드 전용 탭 반환. 없으면 헤더까지 만들어서 생성."""
+    ss = get_sheet().spreadsheet          # 기존 인증 로직 그대로 재사용
+    try:
+        return ss.worksheet(_WC_SHEET_NAME)
+    except Exception:
+        ws = ss.add_worksheet(title=_WC_SHEET_NAME, rows=3000, cols=5)
+        ws.append_row(['시각', '코드', '질문', '단어'])
+        return ws
+
+
+def _wc_log(code, question, word):
+    """단어 하나를 시트에 기록. 백그라운드라 학생 응답이 안 느려집니다."""
+    def job():
+        try:
+            _wc_sheet().append_row([
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                str(code), str(question), str(word)
+            ])
+        except Exception as e:
+            print(f"워드클라우드 시트 저장 오류: {e}")
+
+    _wc_threading.Thread(target=job, daemon=True).start()
+
+
+def _wc_get(code):
+    """
+    메모리에서 세션을 찾고, 없으면 시트에서 복구한다.
+    - 서버 재시작/슬립 후에도 코드가 살아남음
+    - 워커가 여러 개여도 각 워커가 시트에서 같은 내용을 복구
+    시트 읽기는 '메모리에 없을 때만' 일어나므로 API 호출량은 미미합니다.
+    """
+    code = str(code).strip()
+    if not code:
+        return None
+
+    s = _WC_SESSIONS.get(code)
+    if s:
+        return s
+
+    try:
+        rows = _wc_sheet().get_all_values()
+    except Exception as e:
+        print(f"워드클라우드 시트 복구 오류: {e}")
+        return None
+
+    words, question = [], ''
+    for r in rows[1:]:                     # 헤더 건너뛰기
+        if len(r) >= 4 and r[1] == code:
+            question = r[2] or question
+            if r[3]:
+                words.append(r[3])
+
+    if not question and not words:
+        return None
+
+    _WC_SESSIONS[code] = {
+        'q': question,
+        'words': words,
+        'created': datetime.now(),         # 복구 시점 기준으로 3시간 타이머 재시작
+    }
+    return _WC_SESSIONS[code]
