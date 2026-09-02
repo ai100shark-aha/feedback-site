@@ -98,7 +98,7 @@
   </div>
 
   <div id="cloud"></div>
-  <div class="text-muted small mt-2">화면은 2초마다 자동 갱신됩니다.</div>
+  <div class="text-muted small mt-2">{% if closed %}종료된 세션입니다. 결과는 더 이상 바뀌지 않습니다.{% else %}화면은 2초마다 자동 갱신됩니다.{% endif %}</div>
 
   <script>
   const _joinurlEl = document.getElementById('joinurl');
@@ -165,8 +165,12 @@
     } catch (e) {}
   }
   tick();
+  {% if not closed %}
   setInterval(tick, 2000);
   window.addEventListener('resize', () => { prev = ''; tick(); });
+  {% else %}
+  window.addEventListener('resize', () => { prev = ''; tick(); });
+  {% endif %}
   </script>
   {% endif %}
 

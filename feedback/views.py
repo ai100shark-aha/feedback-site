@@ -2094,21 +2094,35 @@ def _wc_get(code):
     return _WC_SESSIONS[code]
 
 
+_WC_CLOSED_CACHE = {}   # 종료된 세션은 더 이상 안 바뀌므로 한 번 읽으면 계속 재사용
+
+
 def _wc_get_any(code):
     """
-    진행중/종료 상관없이 코드의 최종 상태를 시트에서 읽어온다 (이력 보기 전용).
+    진행중/종료 상관없이 코드의 최종 상태를 가져온다 (이력 보기 전용).
     _wc_get()과 달리 종료된 세션도 그대로 반환한다. 메모리(_WC_SESSIONS)는
     건드리지 않으므로 진행중인 세션의 동작에는 영향을 주지 않는다.
+    종료된 세션은 더 이상 바뀌지 않으므로 한 번 읽으면 캐시해서 재사용한다
+    (안 그러면 화면이 2초마다 폴링할 때마다 시트를 통째로 다시 읽어서 느려짐).
     """
     code = str(code).strip()
     if not code:
         return None
+
+    cached = _WC_CLOSED_CACHE.get(code)
+    if cached:
+        return cached
+
     try:
         rows = _wc_sheet().get_all_values()
     except Exception as e:
         print(f"워드클라우드 이력 조회 오류: {e}")
         return None
-    return _wc_replay(rows, only_code=code).get(code)
+
+    st = _wc_replay(rows, only_code=code).get(code)
+    if st and st['closed']:
+        _WC_CLOSED_CACHE[code] = st   # 종료 확정된 것만 캐시
+    return st
 
 
 def _wc_list():
