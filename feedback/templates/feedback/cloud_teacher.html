@@ -101,7 +101,8 @@
   <div class="text-muted small mt-2">화면은 2초마다 자동 갱신됩니다.</div>
 
   <script>
-  document.getElementById('joinurl').textContent = location.origin + '/cloud/join/';
+  const _joinurlEl = document.getElementById('joinurl');
+  if (_joinurlEl) _joinurlEl.textContent = location.origin + '/cloud/join/';
 
   const PALETTE = ['#2f5496','#c0392b','#1e8449','#8e44ad','#d35400',
                    '#16a085','#2c3e50','#b7950b','#a93226','#117864'];
