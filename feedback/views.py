@@ -2094,15 +2094,32 @@ def _wc_get(code):
     return _WC_SESSIONS[code]
 
 
+def _wc_get_any(code):
+    """
+    진행중/종료 상관없이 코드의 최종 상태를 시트에서 읽어온다 (이력 보기 전용).
+    _wc_get()과 달리 종료된 세션도 그대로 반환한다. 메모리(_WC_SESSIONS)는
+    건드리지 않으므로 진행중인 세션의 동작에는 영향을 주지 않는다.
+    """
+    code = str(code).strip()
+    if not code:
+        return None
+    try:
+        rows = _wc_sheet().get_all_values()
+    except Exception as e:
+        print(f"워드클라우드 이력 조회 오류: {e}")
+        return None
+    return _wc_replay(rows, only_code=code).get(code)
+
+
 def _wc_list():
-    """교사 화면에 띄울 세션 목록. 메모리 + 시트를 합쳐서 반환."""
-    out = {c: {'code': c, 'q': v['q'], 'n': len(v['words'])}
+    """교사 화면에 띄울 세션 목록(진행중+종료 전체 이력). 메모리 + 시트를 합쳐서 반환."""
+    out = {c: {'code': c, 'q': v['q'], 'n': len(v['words']), 'closed': False}
            for c, v in _WC_SESSIONS.items()}
     try:
         for c, st in _wc_replay(_wc_sheet().get_all_values()).items():
-            if st['closed'] or c in out:
+            if c in out:
                 continue
-            out[c] = {'code': c, 'q': st['q'], 'n': len(st['words'])}
+            out[c] = {'code': c, 'q': st['q'], 'n': len(st['words']), 'closed': st['closed']}
     except Exception as e:
         print(f"워드클라우드 목록 조회 오류: {e}")
     return [out[c] for c in sorted(out)]
@@ -2146,10 +2163,17 @@ def cloud_teacher(request):
     code = request.GET.get('code', '').strip()
     session = _wc_get(code) if code else None
 
+    # 진행중인 세션이 아니면(종료됨/서버 재시작 등) 이력에서 읽기 전용으로 복구
+    archived = None
+    if code and not session:
+        archived = _wc_get_any(code)
+
+    found = bool(session or archived)
     return render(request, 'feedback/cloud_teacher.html', {
-        'code': code if session else '',
-        'question': session['q'] if session else '',
+        'code': code if found else '',
+        'question': (session['q'] if session else archived['q']) if found else '',
         'active': bool(session),
+        'closed': bool(archived),
         'sessions': _wc_list(),
     })
 
@@ -2197,8 +2221,8 @@ def cloud_join(request):
 # ── View: 워드클라우드 데이터 (교사 화면이 주기적으로 호출) ──────
 
 def cloud_data(request, code):
-    """단어별 빈도 JSON 반환"""
-    session = _wc_get(code)
+    """단어별 빈도 JSON 반환 (진행중 세션 우선, 없으면 이력에서 읽기 전용으로 조회)"""
+    session = _wc_get(code) or _wc_get_any(code)
     if not session:
         return JsonResponse({'ok': False, 'error': 'no_session'})
 
@@ -2210,6 +2234,7 @@ def cloud_data(request, code):
     return JsonResponse({
         'ok': True,
         'question': session['q'],
+        'closed': session.get('closed', False),
         'total': len(session['words']),
         'unique': len(counter),
         'words': [{'text': t, 'count': n} for t, n in items[:80]],
