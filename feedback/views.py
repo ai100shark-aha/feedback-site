@@ -1969,6 +1969,7 @@ def teacher_validate_excel(request):
 import random as _random
 import re as _wc_re
 import threading as _wc_threading
+import time as _wc_time
 from django.http import JsonResponse
 
 # 진행 중인 세션들: {코드: {'q': 질문, 'words': [단어...], 'created': datetime}}
@@ -2033,6 +2034,22 @@ def _wc_log(code, question, word):
     _wc_threading.Thread(target=job, daemon=True).start()
 
 
+def _wc_sheet_rows():
+    """
+    시트 전체 값을 읽어온다. 일시적 오류(네트워크 지연, API 순간 오류 등)에 대비해
+    실패하면 0.5초 쉬었다가 한 번 더 시도한다. 그래도 실패하면 None.
+    """
+    for attempt in range(2):
+        try:
+            return _wc_sheet().get_all_values()
+        except Exception as e:
+            if attempt == 0:
+                _wc_time.sleep(0.5)
+                continue
+            print(f"워드클라우드 시트 읽기 오류(재시도 후에도 실패): {e}")
+            return None
+
+
 def _wc_replay(rows, only_code=None):
     """
     시트 기록을 위에서 아래로 재생해 각 코드의 최종 상태를 만든다.
@@ -2076,10 +2093,8 @@ def _wc_get(code):
     if s:
         return s
 
-    try:
-        rows = _wc_sheet().get_all_values()
-    except Exception as e:
-        print(f"워드클라우드 시트 복구 오류: {e}")
+    rows = _wc_sheet_rows()
+    if rows is None:
         return None
 
     st = _wc_replay(rows, only_code=code).get(code)
@@ -2113,10 +2128,8 @@ def _wc_get_any(code):
     if cached:
         return cached
 
-    try:
-        rows = _wc_sheet().get_all_values()
-    except Exception as e:
-        print(f"워드클라우드 이력 조회 오류: {e}")
+    rows = _wc_sheet_rows()
+    if rows is None:
         return None
 
     st = _wc_replay(rows, only_code=code).get(code)
@@ -2129,13 +2142,12 @@ def _wc_list():
     """교사 화면에 띄울 세션 목록(진행중+종료 전체 이력). 메모리 + 시트를 합쳐서 반환."""
     out = {c: {'code': c, 'q': v['q'], 'n': len(v['words']), 'closed': False}
            for c, v in _WC_SESSIONS.items()}
-    try:
-        for c, st in _wc_replay(_wc_sheet().get_all_values()).items():
+    rows = _wc_sheet_rows()
+    if rows is not None:
+        for c, st in _wc_replay(rows).items():
             if c in out:
                 continue
             out[c] = {'code': c, 'q': st['q'], 'n': len(st['words']), 'closed': st['closed']}
-    except Exception as e:
-        print(f"워드클라우드 목록 조회 오류: {e}")
     return [out[c] for c in sorted(out)]
 
 
