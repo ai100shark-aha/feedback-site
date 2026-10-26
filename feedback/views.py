@@ -2282,33 +2282,33 @@ def cloud_data(request, code):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  수업일지 자동 생성  (Lesson Journal)
-#  - 해당 차시 학생 피드백을 모아 Claude로 수업일지 초안 생성
-#  - 구글 시트 '수업일지' 탭에 영구 저장 (Render 재시작에도 유지)
-#  - 교사가 웹에서 수정·저장, 엑셀로 내려받기
+#  AI 수업 리포트  (Lesson Journal)
+#  노션 자동 요약(매 차시·반별)과 겹치지 않도록 두 가지를 제공합니다.
+#   1) 기간 분석: 반 + 기간(여러 차시)을 묶어 흐름·반복 어려움·참여 추이 분석
+#   2) 학생 누적 기록: 한 학생의 전체 응답을 모아 탐구·진로·성장 흐름과 과세특 근거 정리
+#  - 결과는 구글 시트 'AI리포트' 탭에 영구 저장, 교사가 수정·저장·엑셀 다운로드
 # ═══════════════════════════════════════════════════════════════
 
-_JOURNAL_SHEET_NAME = '수업일지'
-_JOURNAL_HEADERS = ['생성시각', '수업명', '반', '차시', '수업일',
-                    '제출인원', '교사메모', '일지', '수정시각']
-# Render 무료 플랜은 요청이 30초를 넘으면 끊기므로 빠른 모델을 기본값으로 사용
+_REPORT_SHEET_NAME = 'AI리포트'
+_REPORT_HEADERS = ['생성시각', '종류', '반', '대상', '키', '교사메모', '본문', '수정시각']
+# Render 무료 플랜(gunicorn 기본 30초 제한) 안에서 끝나도록 빠른 모델을 기본값으로 사용
 _JOURNAL_MODEL = os.environ.get('JOURNAL_MODEL', 'claude-haiku-5-5')
-
-
 _JOURNAL_CACHE = {'ws': None, 'rows': None, 'feedback': None, 'feedback_at': 0}
-_FEEDBACK_TTL = 60   # 피드백 원본은 60초 동안 재사용 (반 전환이 빨라짐)
+_FEEDBACK_TTL = 60   # 피드백 원본은 60초 동안 재사용 (반·학생 전환이 빨라짐)
 
+
+# ── 시트 입출력 ─────────────────────────────────────────────────
 
 def _journal_sheet():
-    """수업일지 전용 탭 반환. 없으면 헤더까지 만들어서 생성. 한 번 찾으면 재사용."""
+    """AI리포트 전용 탭 반환. 없으면 헤더까지 만들어서 생성. 한 번 찾으면 재사용."""
     if _JOURNAL_CACHE['ws'] is not None:
         return _JOURNAL_CACHE['ws']
     ss = get_sheet().spreadsheet
     try:
-        ws = ss.worksheet(_JOURNAL_SHEET_NAME)
+        ws = ss.worksheet(_REPORT_SHEET_NAME)
     except Exception:
-        ws = ss.add_worksheet(title=_JOURNAL_SHEET_NAME, rows=1000, cols=len(_JOURNAL_HEADERS))
-        ws.append_row(_JOURNAL_HEADERS)
+        ws = ss.add_worksheet(title=_REPORT_SHEET_NAME, rows=1000, cols=len(_REPORT_HEADERS))
+        ws.append_row(_REPORT_HEADERS)
     _JOURNAL_CACHE['ws'] = ws
     return ws
 
@@ -2323,242 +2323,369 @@ def _cached_feedback_rows(force=False):
     return _JOURNAL_CACHE['feedback']
 
 
-def _cached_journals(force=False):
-    """수업일지 시트 (저장할 때만 다시 읽음)"""
+def _cached_reports(force=False):
+    """AI리포트 시트 → {키: {...}} (저장할 때만 다시 읽음)"""
     if force or _JOURNAL_CACHE['rows'] is None:
-        _JOURNAL_CACHE['rows'] = _journal_rows(_journal_sheet())
+        result = {}
+        values = _journal_sheet().get_all_values()
+        for i, row in enumerate(values[1:], start=2):
+            row = row + [''] * (len(_REPORT_HEADERS) - len(row))
+            if not row[4]:
+                continue
+            result[row[4]] = {
+                'row': i, 'created': row[0], 'kind': row[1], 'class_name': row[2],
+                'target': row[3], 'key': row[4], 'note': row[5], 'body': row[6],
+                'updated': row[7],
+            }
+        _JOURNAL_CACHE['rows'] = result
     return _JOURNAL_CACHE['rows']
 
 
-def _journal_rows(ws):
-    """수업일지 시트 → {수업명: {'row': 시트행번호, ...}}"""
-    result = {}
-    values = ws.get_all_values()
-    for i, row in enumerate(values[1:], start=2):
-        row = row + [''] * (len(_JOURNAL_HEADERS) - len(row))
-        if not row[1]:
-            continue
-        result[row[1]] = {
-            'row':        i,
-            'created':    row[0],
-            'title':      row[1],
-            'class_name': row[2],
-            'chapter':    row[3],
-            'date':       row[4],
-            'submitted':  row[5],
-            'note':       row[6],
-            'body':       row[7],
-            'updated':    row[8],
-        }
-    return result
-
-
-def _journal_upsert(ws, existing, lesson, submitted, note, body, is_new_generation):
-    """수업명 기준으로 있으면 덮어쓰고, 없으면 새 줄 추가"""
+def _report_upsert(kind, class_name, target, key, note, body, regenerated):
+    """키 기준으로 있으면 덮어쓰고, 없으면 새 줄 추가"""
+    ws = _journal_sheet()
+    existing = _cached_reports(force=True)
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
-    old = existing.get(lesson['title'])
-    created = now if (is_new_generation or not old) else old['created']
-    values = [created, lesson['title'], lesson['class'], _chapter_of(lesson),
-              lesson['date'], str(submitted), note, body, now]
+    old = existing.get(key)
+    created = now if (regenerated or not old) else old['created']
+    values = [created, kind, class_name, target, key, note, body, now]
     if old:
-        ws.update(range_name=f"A{old['row']}:I{old['row']}", values=[values])
+        ws.update(range_name=f"A{old['row']}:H{old['row']}", values=[values])
     else:
         ws.append_row(values)
+    _cached_reports(force=True)
 
+
+# ── 데이터 정리 ─────────────────────────────────────────────────
 
 def _chapter_of(lesson):
     m = re.search(r'(\d+)차시', lesson['title'])
-    return m.group(1) if m else ''
+    return int(m.group(1)) if m else 0
 
 
-def _lesson_feedback(rows, lesson_title):
-    """피드백 시트에서 해당 차시 응답만 모음 (학번 기준 중복 제거, 마지막 제출 우선)"""
-    by_student = {}
+def _class_size(class_name):
+    code = _CLASS_NAME_TO_CODE.get(class_name)
+    return sum(1 for sid in _VALID_IDS if sid.startswith(code)) if code else 0
+
+
+def _clip(s, n):
+    s = re.sub(r'\s+', ' ', str(s or '')).strip()
+    return s if len(s) <= n else s[:n] + '…'
+
+
+def _feedback_by_lesson(rows):
+    """{수업명: {학번: {이름, 응답...}}} — 같은 학번은 마지막 제출만 사용"""
+    out = defaultdict(dict)
     for row in rows[1:]:
-        if len(row) < 3 or row[1] != lesson_title or not row[2]:
+        if len(row) < 3 or not row[1] or not row[2]:
             continue
         row = row + [''] * (10 - len(row))
-        by_student[row[2]] = {
-            'summary':   row[5].strip(),
-            'problem':   row[6].strip(),
-            'career':    row[7].strip(),
-            'deeplearn': row[8].strip(),
-            'peer':      row[9].strip(),
+        out[row[1]][row[2]] = {
+            'name': row[4].strip(), 'summary': row[5], 'problem': row[6],
+            'career': row[7], 'deeplearn': row[8], 'peer': row[9],
         }
-    return list(by_student.values())
+    return out
 
 
-def _generate_journal_with_claude(lesson, records, note):
-    """학생 응답 + 교사 메모 → 수업일지 본문. 실패 시 (None, 오류메시지)."""
+def _period_stats(by_lesson, class_name, start, end):
+    """기간 안의 차시별 제출 현황 + 학생별 제출 횟수 (AI 없이 계산)"""
+    size = _class_size(class_name)
+    lessons = [l for l in LESSONS if l['class'] == class_name and start <= l['date'] <= end]
+    lessons.sort(key=lambda l: (l['date'], _chapter_of(l)))
+    per_lesson, per_student, names = [], defaultdict(int), {}
+    for l in lessons:
+        subs = by_lesson.get(l['title'], {})
+        for sid, r in subs.items():
+            per_student[sid] += 1
+            if r['name']:
+                names[sid] = r['name']
+        per_lesson.append({
+            'title': l['title'], 'date': l['date'], 'chapter': _chapter_of(l),
+            'submitted': len(subs),
+            'rate': round(len(subs) * 100 / size) if size else 0,
+        })
+    code = _CLASS_NAME_TO_CODE.get(class_name, '')
+    held = [p for p in per_lesson if p['submitted'] > 0]
+    low = []
+    if len(held) >= 2:
+        for sid in sorted(x for x in _VALID_IDS if x.startswith(code)):
+            cnt = per_student.get(sid, 0)
+            if cnt <= len(held) // 2:
+                low.append({'student_id': sid, 'name': names.get(sid, ''), 'count': cnt})
+    total = sum(p['submitted'] for p in per_lesson)
+    return {
+        'lessons': per_lesson,
+        'held': len(held),
+        'size': size,
+        'avg_rate': round(sum(p['rate'] for p in held) / len(held)) if held else 0,
+        'total': total,
+        'low': low,
+    }
+
+
+def _student_records(rows, student_id):
+    """한 학생의 전체 제출 (차시 순) + 다른 학생이 이 학생을 칭찬한 문장"""
+    mine, name = {}, ''
+    for row in rows[1:]:
+        if len(row) >= 3 and row[2] == student_id and row[1]:
+            row = row + [''] * (10 - len(row))
+            name = row[4].strip() or name
+            mine[row[1]] = {
+                'title': row[1], 'summary': row[5], 'problem': row[6],
+                'career': row[7], 'deeplearn': row[8], 'peer': row[9],
+            }
+
+    def order(rec):
+        l = _TITLE_TO_LESSON.get(rec['title'])
+        return (l['date'], _chapter_of(l)) if l else ('9999', 0)
+    records = sorted(mine.values(), key=order)
+    for r in records:
+        l = _TITLE_TO_LESSON.get(r['title'])
+        r['date'] = l['date'] if l else ''
+
+    praised = []
+    if len(name) >= 2:
+        code = student_id[:3]
+        for row in rows[1:]:
+            if len(row) >= 10 and row[2] != student_id and row[2][:3] == code and name in row[9]:
+                praised.append(row[9].replace(name, '이 학생'))
+    return name, records, praised
+
+
+# ── Claude 호출 ─────────────────────────────────────────────────
+
+def _ask_claude(prompt, max_tokens=1800):
     api_key = os.environ.get('ANTHROPIC_API_KEY', '')
     if not api_key:
         return None, 'ANTHROPIC_API_KEY가 설정되어 있지 않습니다.'
-    if not records:
-        return None, '이 차시에 제출된 피드백이 없어 일지를 만들 수 없습니다.'
-
-    # 학생 이름·학번은 보내지 않고 번호(학생1, 학생2…)로만 구분
-    def cut(s, n=200):
-        return s if len(s) <= n else s[:n] + '…'
-    lines = []
-    for i, r in enumerate(records, start=1):
-        lines.append(
-            f"[학생{i}] 핵심개념: {cut(r['summary'])} / 문제해결: {cut(r['problem'])} / "
-            f"진로연결: {cut(r['career'])} / 심화학습: {cut(r['deeplearn'])} / 칭찬: {cut(r['peer'], 120)}"
-        )
-    responses = '\n'.join(lines)[:14000]
-
-    prompt = f"""당신은 고등학교 정보 교사의 수업일지 작성을 돕는 조수입니다.
-아래는 {lesson['class']} {_chapter_of(lesson)}차시({lesson['date']}) 수업 후 학생 {len(records)}명이 제출한 수업 피드백입니다.
-
-[교사 메모] {note or '(없음)'}
-
-[학생 피드백]
-{responses}
-
-위 자료만 근거로 수업일지를 작성하세요. 규칙:
-- 아래 형식을 그대로 지키고, 각 항목은 2~4문장 또는 '- '로 시작하는 짧은 목록으로 씁니다.
-- 학생 응답에 없는 내용을 지어내지 마세요. 근거가 부족한 항목은 "응답에서 확인되지 않음"이라고 씁니다.
-- 몇 명이 비슷한 응답을 했는지 대략적인 비율이나 인원을 함께 적습니다.
-- 학생 이름은 '동료 칭찬' 항목에서 칭찬받은 학생 이름이 응답에 있을 때만 씁니다.
-- 마크다운 기호(#, **)는 쓰지 말고 아래 ■ 머리말만 사용합니다.
-
-■ 수업 개요
-■ 학생 이해도 (잘 이해한 개념 / 헷갈려한 개념)
-■ 문제 해결 과정과 어려움
-■ 진로 연계 반응
-■ 심화 학습 관심
-■ 동료 칭찬·우수 사례
-■ 다음 수업 보완점"""
-
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key, timeout=25.0, max_retries=0)
         msg = client.messages.create(
-            model=_JOURNAL_MODEL,
-            max_tokens=1500,
+            model=_JOURNAL_MODEL, max_tokens=max_tokens,
             messages=[{'role': 'user', 'content': prompt}],
         )
-        text = msg.content[0].text.strip()
-        return text, None
+        return msg.content[0].text.strip(), None
     except Exception as e:
-        print(f"수업일지 생성 오류: {e}")
-        return None, f'AI 일지 생성 중 오류가 발생했습니다: {e}'
+        print(f"AI 리포트 생성 오류: {e}")
+        return None, f'AI 생성 중 오류가 발생했습니다: {e}'
+
+
+_FORMAT_RULES = """작성 규칙:
+- 아래 ■ 머리말 형식을 그대로 지키고, 각 항목은 2~4문장 또는 '- '로 시작하는 짧은 목록으로 씁니다.
+- 자료에 없는 내용을 지어내지 마세요. 근거가 부족한 항목은 "자료에서 확인되지 않음"이라고 씁니다.
+- 근거가 된 차시를 (3차시), (5·7차시)처럼 괄호로 표시합니다.
+- 마크다운 기호(#, **)는 쓰지 말고 ■ 머리말만 사용합니다."""
+
+
+def _period_prompt(class_name, start, end, stats, by_lesson, note):
+    blocks, budget = [], 24000
+    held = max(stats['held'], 1)
+    per_resp = 110 if held <= 8 else 60
+    # 기간이 길어도 최근 차시가 잘리지 않도록, 차시마다 같은 수의 응답만 고르게 사용
+    per_lesson = max(3, budget // (held * (2 * per_resp + 90)))
+    for p in stats['lessons']:
+        subs = by_lesson.get(p['title'], {})
+        if not subs:
+            continue
+        lines = [f"[{p['chapter']}차시 · {p['date']} · {p['submitted']}명 제출]"]
+        picked = sorted(subs.values(), key=lambda r: -len(r['summary'] + r['problem']))[:per_lesson]
+        for r in picked:
+            lines.append(f"- 배움: {_clip(r['summary'], per_resp)} / 어려움: {_clip(r['problem'], per_resp)}"
+                         f" / 심화: {_clip(r['deeplearn'], 60)}")
+        blocks.append('\n'.join(lines))
+    data = '\n\n'.join(blocks)[:budget]
+    rate_line = ', '.join(f"{p['chapter']}차시 {p['rate']}%" for p in stats['lessons'] if p['submitted'])
+    return f"""당신은 고등학교 정보 교사의 수업 분석을 돕는 조수입니다.
+{class_name}의 {start}~{end} 기간({stats['held']}개 차시) 학생 수업 피드백입니다.
+매 차시 요약은 이미 따로 하고 있으므로, 여기서는 '여러 차시를 묶어서 볼 때만 보이는 흐름'에 집중하세요.
+
+[차시별 제출률] {rate_line or '(없음)'}
+[교사 메모] {note or '(없음)'}
+
+[학생 응답 — 이름·학번 제외]
+{data}
+
+{_FORMAT_RULES}
+
+■ 기간 요약 (이 기간에 다룬 내용과 전체 분위기)
+■ 이해의 흐름 (차시가 지나며 학생들의 이해가 어떻게 변했는지)
+■ 반복되는 어려움 (2개 차시 이상 계속 나온 어려움과 추정 원인)
+■ 해결된 어려움 (초반엔 어려워했지만 나중에 줄어든 것)
+■ 관심과 심화 경향 (학생들이 계속 궁금해하는 주제)
+■ 참여 추이 해석 (제출률 변화가 의미하는 점)
+■ 다음 단원 전략 (위 분석에 근거한 구체적 제안 3가지)"""
+
+
+def _student_prompt(class_name, records, praised, note):
+    lines = []
+    per = 160 if len(records) <= 25 else 100
+    for r in records:
+        l = _TITLE_TO_LESSON.get(r['title'])
+        ch = f"{_chapter_of(l)}차시" if l else r['title']
+        lines.append(f"[{ch} {r['date']}] 배움: {_clip(r['summary'], per)} / 문제해결: {_clip(r['problem'], per)}"
+                     f" / 진로: {_clip(r['career'], per)} / 심화: {_clip(r['deeplearn'], per)}")
+    data = '\n'.join(lines)[:20000]
+    peers = '\n'.join(f"- {_clip(p, 120)}" for p in praised[:15]) or '(없음)'
+    return f"""당신은 고등학교 정보 교사의 학생 관찰 기록을 돕는 조수입니다.
+{class_name} 한 학생이 {len(records)}개 차시에 걸쳐 제출한 수업 피드백입니다. (이름·학번 제외)
+
+[교사 관찰 메모] {note or '(없음)'}
+
+[학생 응답 — 차시 순]
+{data}
+
+[다른 학생들이 이 학생을 칭찬한 내용]
+{peers}
+
+{_FORMAT_RULES}
+- '이 학생'이라고 지칭하고, 평가는 응답에서 드러난 행동과 표현으로만 판단합니다.
+
+■ 참여 특징 (응답의 성실도·구체성 변화)
+■ 탐구 주제의 흐름 (관심을 보인 주제가 어떻게 이어지고 깊어졌는지)
+■ 문제 해결 사례 (스스로 어려움을 해결한 구체적 장면 2~3개)
+■ 진로 연결 (반복해서 언급한 진로·관심 분야와 수업 내용의 연결)
+■ 동료 관계 (다른 학생의 칭찬에서 드러난 모습)
+■ 과세특 근거 문장 후보 (생활기록부에 옮길 수 있는 관찰 문장 3~4개, '~함', '~임'체, 근거 차시 표시)"""
+
+
+# ── View ────────────────────────────────────────────────────────
+
+def _period_key(class_name, start, end):
+    return f'기간|{class_name}|{start}~{end}'
+
+
+def _student_key(student_id):
+    return f'학생|{student_id}'
 
 
 def teacher_journal(request):
-    """교사용: 반·차시 선택 → AI 수업일지 생성·수정·저장"""
+    """교사용 AI 수업 리포트: 기간 분석 / 학생 누적 기록"""
     if not request.session.get('teacher_auth'):
         return redirect('teacher_dashboard')
 
-    today_str = datetime.now().strftime('%Y-%m-%d')
-    sel_class = request.GET.get('class') or request.POST.get('class') or CLASS_ORDER[0]
-    if sel_class not in CLASS_ORDER:
-        sel_class = CLASS_ORDER[0]
-    try:
-        sel_lesson_id = int(request.GET.get('lesson') or request.POST.get('lesson_id') or 0)
-    except ValueError:
-        sel_lesson_id = 0
+    P = request.POST if request.method == 'POST' else request.GET
+    mode = P.get('mode') if P.get('mode') in ('period', 'student') else 'period'
+    sel_class = P.get('class') if P.get('class') in CLASS_ORDER else CLASS_ORDER[0]
+    today = datetime.now().date()
+    today_str = today.strftime('%Y-%m-%d')
 
-    error = None
-    message = None
-    feedback_rows, journals, ws = [], {}, None
+    error = message = None
+    rows, reports = [], {}
     is_post = request.method == 'POST'
     try:
-        # 저장·생성 때는 최신 값으로, 단순 조회(반·차시 이동)는 캐시로 빠르게
-        feedback_rows = _cached_feedback_rows(force=is_post)
-        ws = _journal_sheet()
-        journals = _cached_journals(force=is_post)
+        rows = _cached_feedback_rows(force=is_post)
+        reports = _cached_reports(force=is_post)
     except Exception as e:
         _JOURNAL_CACHE['ws'] = None
         _SHEET_CACHE['sheet'] = None
         error = f'구글 시트 불러오기 오류: {e}'
+    by_lesson = _feedback_by_lesson(rows)
 
-    sel_lesson = next((l for l in LESSONS if l['id'] == sel_lesson_id
-                       and l['class'] == sel_class), None)
-    editor_body = ''
-    editor_note = ''
+    ctx = {
+        'mode': mode, 'all_classes': CLASS_ORDER, 'sel_class': sel_class,
+        'note': '', 'body': '', 'saved_at': '',
+    }
 
-    if request.method == 'POST' and sel_lesson and ws is not None:
-        action = request.POST.get('action')
-        note = request.POST.get('note', '').strip()[:500]
-        records = _lesson_feedback(feedback_rows, sel_lesson['title'])
-        if action == 'generate':
-            body, gen_error = _generate_journal_with_claude(sel_lesson, records, note)
-            if gen_error:
-                error = gen_error
-                editor_note = note
-                editor_body = request.POST.get('body', '')
+    # ── 처리할 대상 결정 ──
+    if mode == 'period':
+        class_lessons = sorted((l for l in LESSONS if l['class'] == sel_class), key=lambda l: l['date'])
+        first_date = class_lessons[0]['date'] if class_lessons else today_str
+        def _valid(d):
+            try:
+                datetime.strptime(d or '', '%Y-%m-%d')
+                return True
+            except ValueError:
+                return False
+        start = P.get('start') if _valid(P.get('start')) else (today - timedelta(days=13)).strftime('%Y-%m-%d')
+        end = P.get('end') if _valid(P.get('end')) else today_str
+        if start > end:
+            start, end = end, start
+        stats = _period_stats(by_lesson, sel_class, start, end)
+        key = _period_key(sel_class, start, end)
+        ctx.update({
+            'start': start, 'end': end, 'stats': stats,
+            'quick': [
+                ('최근 1주', (today - timedelta(days=6)).strftime('%Y-%m-%d'), today_str),
+                ('최근 2주', (today - timedelta(days=13)).strftime('%Y-%m-%d'), today_str),
+                ('최근 4주', (today - timedelta(days=27)).strftime('%Y-%m-%d'), today_str),
+                ('학기 전체', first_date, today_str),
+            ],
+            'can_generate': stats['held'] >= 1,
+        })
+        kind, target = '기간분석', f'{start}~{end}'
+    else:
+        code = _CLASS_NAME_TO_CODE.get(sel_class, '')
+        counts, names = defaultdict(int), {}
+        for title, subs in by_lesson.items():
+            for sid, r in subs.items():
+                if sid.startswith(code):
+                    counts[sid] += 1
+                    if r['name']:
+                        names[sid] = r['name']
+        students = [{'student_id': sid, 'num': int(sid[3:]), 'name': names.get(sid, ''),
+                     'count': counts.get(sid, 0), 'has_report': _student_key(sid) in reports}
+                    for sid in sorted(x for x in _VALID_IDS if x.startswith(code))]
+        sid = P.get('student', '')
+        sel_student = next((s for s in students if s['student_id'] == sid), None)
+        ctx['students'] = students
+        ctx['sel_student'] = sel_student
+        ctx['can_generate'] = bool(sel_student and sel_student['count'] >= 2)
+        key = _student_key(sid) if sel_student else None
+        kind, target = '학생누적', (f"{sid} {sel_student['name']}".strip() if sel_student else '')
+
+    # ── 생성 / 저장 ──
+    if is_post and key and not error:
+        action = P.get('action')
+        note = P.get('note', '').strip()[:500]
+        ctx['note'] = note
+        if action == 'generate' and ctx['can_generate']:
+            if mode == 'period':
+                prompt = _period_prompt(sel_class, ctx['start'], ctx['end'], ctx['stats'], by_lesson, note)
             else:
+                _, records, praised = _student_records(rows, sid)
+                prompt = _student_prompt(sel_class, records, praised, note)
+            body, gen_error = _ask_claude(prompt)
+            if gen_error:
+                error, ctx['body'] = gen_error, P.get('body', '')
+            else:
+                ctx['body'] = body
                 try:
-                    _journal_upsert(ws, journals, sel_lesson, len(records), note, body, True)
-                    message = 'AI 초안을 만들어 저장했습니다. 내용을 확인하고 필요한 부분을 고친 뒤 다시 저장하세요.'
+                    _report_upsert(kind, sel_class, target, key, note, body, True)
+                    message = 'AI 초안을 만들어 저장했습니다. 확인하고 필요한 부분을 고친 뒤 다시 저장하세요.'
                 except Exception as e:
                     error = f'생성은 됐지만 시트 저장에 실패했습니다: {e}'
-                editor_note, editor_body = note, body
         elif action == 'save':
-            body = request.POST.get('body', '').strip()
+            body = P.get('body', '').strip()
+            ctx['body'] = body
             if not body:
-                error = '저장할 일지 내용이 비어 있습니다.'
+                error = '저장할 내용이 비어 있습니다.'
             else:
                 try:
-                    _journal_upsert(ws, journals, sel_lesson, len(records), note, body, False)
+                    _report_upsert(kind, sel_class, target, key, note, body, False)
                     message = '수정한 내용을 저장했습니다.'
                 except Exception as e:
                     error = f'시트 저장 오류: {e}'
-            editor_note, editor_body = note, body
         try:
-            journals = _cached_journals(force=True)
+            reports = _cached_reports()
         except Exception:
             pass
-    elif sel_lesson and sel_lesson['title'] in journals:
-        j = journals[sel_lesson['title']]
-        editor_note, editor_body = j['note'], j['body']
+    elif key and key in reports:
+        ctx['note'], ctx['body'] = reports[key]['note'], reports[key]['body']
+    if key and key in reports:
+        ctx['saved_at'] = reports[key]['updated']
 
-    # 선택한 반의 지난 차시 목록 (최신순) + 제출 인원 + 일지 여부
-    counts = defaultdict(set)
-    for row in feedback_rows[1:]:
-        if len(row) >= 3 and row[2]:
-            counts[row[1]].add(row[2])
-    lesson_list = []
-    for l in LESSONS:
-        if l['class'] != sel_class or l['date'] > today_str:
-            continue
-        lesson_list.append({
-            'id': l['id'],
-            'title': l['title'],
-            'date': l['date'],
-            'chapter': _chapter_of(l),
-            'submitted': len(counts.get(l['title'], ())),
-            'has_journal': l['title'] in journals,
-        })
-    lesson_list.sort(key=lambda x: (x['date'], int(x['chapter'] or 0)), reverse=True)
-
-    sel_info = None
-    if sel_lesson:
-        j = journals.get(sel_lesson['title'])
-        sel_info = {
-            'id': sel_lesson['id'],
-            'title': sel_lesson['title'],
-            'date': sel_lesson['date'],
-            'submitted': len(counts.get(sel_lesson['title'], ())),
-            'saved_at': j['updated'] if j else '',
-        }
-
-    return render(request, 'feedback/teacher_journal.html', {
-        'all_classes': CLASS_ORDER,
-        'sel_class':   sel_class,
-        'lessons':     lesson_list,
-        'sel':         sel_info,
-        'note':        editor_note,
-        'body':        editor_body,
-        'error':       error,
-        'message':     message,
-        'journal_count': sum(1 for j in journals.values() if j['class_name'] == sel_class),
-    })
+    # 저장된 기간 분석 목록 (이 반)
+    ctx['saved_periods'] = sorted(
+        [r for r in reports.values() if r['kind'] == '기간분석' and r['class_name'] == sel_class],
+        key=lambda r: r['target'], reverse=True)
+    ctx['report_count'] = sum(1 for r in reports.values() if r['class_name'] == sel_class)
+    ctx.update({'error': error, 'message': message})
+    return render(request, 'feedback/teacher_journal.html', ctx)
 
 
 def teacher_journal_excel(request):
-    """교사용: 저장된 수업일지 엑셀 다운로드 (?class=1반 으로 반별 필터)"""
+    """교사용: 저장된 AI 리포트 엑셀 다운로드 (?class=1반 으로 반별 필터)"""
     if not request.session.get('teacher_auth'):
         return redirect('teacher_dashboard')
     from openpyxl import Workbook
@@ -2566,40 +2693,38 @@ def teacher_journal_excel(request):
 
     filter_class = request.GET.get('class', '')
     try:
-        journals = list(_cached_journals(force=True).values())
+        reports = list(_cached_reports(force=True).values())
     except Exception as e:
         return HttpResponse(f'구글 시트 불러오기 오류: {e}', status=500)
     if filter_class:
-        journals = [j for j in journals if j['class_name'] == filter_class]
+        reports = [r for r in reports if r['class_name'] == filter_class]
 
-    def rank(j):
-        cr = CLASS_ORDER.index(j['class_name']) if j['class_name'] in CLASS_ORDER else 99
-        return (cr, j['date'], int(j['chapter'] or 0))
-    journals.sort(key=rank)
+    def rank(r):
+        cr = CLASS_ORDER.index(r['class_name']) if r['class_name'] in CLASS_ORDER else 99
+        return (cr, r['target'])
 
     wb = Workbook()
-    ws = wb.active
-    ws.title = '수업일지'
-    headers = ['반', '차시', '수업일', '제출인원', '교사메모', '수업일지', '최종수정']
-    ws.append(headers)
-    for c in ws[1]:
-        c.font = Font(bold=True, color='FFFFFF')
-        c.fill = PatternFill('solid', fgColor='2F5496')
-        c.alignment = Alignment(horizontal='center', vertical='center')
-    for j in journals:
-        ws.append([j['class_name'], j['chapter'], j['date'], j['submitted'],
-                   j['note'], j['body'], j['updated']])
-    widths = [7, 6, 12, 9, 25, 90, 17]
-    for i, w in enumerate(widths):
-        ws.column_dimensions[chr(65 + i)].width = w
-    for row in ws.iter_rows(min_row=2):
-        for c in row:
-            c.alignment = Alignment(wrap_text=True, vertical='top')
+    wb.remove(wb.active)
+    for kind, title, widths in [('기간분석', '기간 분석', [7, 24, 25, 90, 17]),
+                                ('학생누적', '학생 누적 기록', [7, 16, 25, 90, 17])]:
+        ws = wb.create_sheet(title)
+        ws.append(['반', '기간' if kind == '기간분석' else '학생', '교사메모', '내용', '최종수정'])
+        for c in ws[1]:
+            c.font = Font(bold=True, color='FFFFFF')
+            c.fill = PatternFill('solid', fgColor='2F5496')
+            c.alignment = Alignment(horizontal='center', vertical='center')
+        for r in sorted((x for x in reports if x['kind'] == kind), key=rank):
+            ws.append([r['class_name'], r['target'], r['note'], r['body'], r['updated']])
+        for i, w in enumerate(widths):
+            ws.column_dimensions[chr(65 + i)].width = w
+        for row in ws.iter_rows(min_row=2):
+            for c in row:
+                c.alignment = Alignment(wrap_text=True, vertical='top')
 
     buf = io.BytesIO()
     wb.save(buf)
     from urllib.parse import quote
-    fname = f"수업일지_{filter_class or '전체'}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    fname = f"AI리포트_{filter_class or '전체'}_{datetime.now().strftime('%Y%m%d')}.xlsx"
     resp = HttpResponse(buf.getvalue(),
                         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     resp['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(fname)}"

@@ -3,37 +3,52 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>수업일지</title>
+  <title>AI 수업 리포트</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    .lesson-item { font-size: 13px; }
-    .lesson-item.active { background: #fff3cd; border-left: 4px solid #ffc107; color: #212529; border-color: #dee2e6; }
-    .lesson-list { max-height: 560px; overflow-y: auto; }
-    @media (max-width: 767px) { .lesson-list { max-height: 240px; } }
+    .side-list { max-height: 520px; overflow-y: auto; }
+    @media (max-width: 767px) { .side-list { max-height: 240px; } }
+    .side-item { font-size: 13px; }
+    .side-item.sel { background: #fff3cd; border-left: 4px solid #ffc107; color: #212529; }
     #body { font-size: 14px; line-height: 1.7; min-height: 420px; }
     .class-tabs .btn { min-width: 52px; }
+    .rate-bar { height: 6px; background: #e9ecef; border-radius: 3px; overflow: hidden; }
+    .rate-bar > div { height: 100%; background: #0d6efd; }
+    .muted-sm { font-size: 11px; color: #888; }
   </style>
 </head>
 <body class="bg-light">
 <div class="container-fluid py-3" style="max-width: 1100px">
 
   <!-- 상단 바 -->
-  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
     <div>
       <a href="/teacher/" class="btn btn-outline-secondary btn-sm me-1">← 대시보드</a>
-      <span class="fw-bold fs-5">📒 수업일지</span>
-      <span class="text-muted small ms-1">학생 피드백으로 AI 초안 → 확인·수정 → 저장</span>
+      <span class="fw-bold fs-5">📒 AI 수업 리포트</span>
     </div>
     <div class="d-flex gap-2">
       <a href="/teacher/journal/excel/?class={{ sel_class }}" class="btn btn-outline-success btn-sm">⬇ {{ sel_class }} 엑셀</a>
       <a href="/teacher/journal/excel/" class="btn btn-outline-success btn-sm">⬇ 전체 엑셀</a>
     </div>
   </div>
+  <p class="small text-muted mb-3">
+    매 차시 요약은 노션에 자동 기록됩니다. 여기서는 <b>여러 차시를 묶은 흐름</b>과 <b>학생 한 명의 누적 기록</b>을 봅니다.
+  </p>
+
+  <!-- 모드 탭 -->
+  <ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+      <a class="nav-link {% if mode == 'period' %}active fw-bold{% endif %}" href="?mode=period&class={{ sel_class }}">📈 기간 분석</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if mode == 'student' %}active fw-bold{% endif %}" href="?mode=student&class={{ sel_class }}">🧑‍🎓 학생 누적 기록</a>
+    </li>
+  </ul>
 
   <!-- 반 선택 -->
   <div class="class-tabs d-flex flex-wrap gap-1 mb-3">
     {% for cn in all_classes %}
-    <a href="?class={{ cn }}"
+    <a href="?mode={{ mode }}&class={{ cn }}{% if mode == 'period' %}&start={{ start }}&end={{ end }}{% endif %}"
        class="btn btn-sm {% if cn == sel_class %}btn-dark{% else %}btn-outline-dark{% endif %}">{{ cn }}</a>
     {% endfor %}
   </div>
@@ -42,102 +57,172 @@
   {% if message %}<div class="alert alert-success py-2 small">{{ message }}</div>{% endif %}
 
   <div class="row g-3">
-    <!-- 차시 목록 -->
+    <!-- ═══ 왼쪽 ═══ -->
     <div class="col-md-4">
-      <div class="card shadow-sm">
-        <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
-          <span class="fw-bold small">{{ sel_class }} 지난 차시</span>
-          <span class="badge bg-secondary">일지 {{ journal_count }}건</span>
+      {% if mode == 'period' %}
+      <div class="card shadow-sm mb-3">
+        <div class="card-body py-3">
+          <form method="GET" class="mb-2">
+            <input type="hidden" name="mode" value="period">
+            <input type="hidden" name="class" value="{{ sel_class }}">
+            <div class="d-flex gap-1 align-items-center mb-2">
+              <input type="date" name="start" value="{{ start }}" class="form-control form-control-sm">
+              <span class="small">~</span>
+              <input type="date" name="end" value="{{ end }}" class="form-control form-control-sm">
+            </div>
+            <button class="btn btn-outline-primary btn-sm w-100">기간 적용</button>
+          </form>
+          <div class="d-flex flex-wrap gap-1">
+            {% for label, s, e in quick %}
+            <a href="?mode=period&class={{ sel_class }}&start={{ s }}&end={{ e }}"
+               class="btn btn-sm {% if s == start and e == end %}btn-secondary{% else %}btn-outline-secondary{% endif %}">{{ label }}</a>
+            {% endfor %}
+          </div>
         </div>
-        <div class="list-group list-group-flush lesson-list">
-          {% for l in lessons %}
-          <a href="?class={{ sel_class }}&lesson={{ l.id }}"
-             class="list-group-item list-group-item-action lesson-item d-flex align-items-center gap-2
-                    {% if sel and sel.id == l.id %}active{% endif %}">
-            <span class="text-muted" style="width:78px; flex-shrink:0; font-size:11px">{{ l.date }}</span>
-            <span class="flex-grow-1">{{ l.chapter }}차시</span>
-            {% if l.submitted %}
-            <span class="badge bg-primary">{{ l.submitted }}명</span>
-            {% else %}
-            <span class="text-muted" style="font-size:11px">0명</span>
-            {% endif %}
-            {% if l.has_journal %}<span title="일지 있음">📒</span>{% else %}<span style="width:16px"></span>{% endif %}
-          </a>
+      </div>
+
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-white py-2 small fw-bold d-flex justify-content-between">
+          <span>차시별 제출률</span>
+          <span class="text-muted fw-normal">재적 {{ stats.size }}명 · 평균 {{ stats.avg_rate }}%</span>
+        </div>
+        <div class="list-group list-group-flush side-list">
+          {% for p in stats.lessons %}
+          <div class="list-group-item side-item py-2">
+            <div class="d-flex justify-content-between">
+              <span>{{ p.chapter }}차시 <span class="muted-sm">{{ p.date }}</span></span>
+              <span class="{% if p.submitted %}fw-bold{% else %}text-muted{% endif %}">{{ p.submitted }}명 · {{ p.rate }}%</span>
+            </div>
+            <div class="rate-bar mt-1"><div style="width: {{ p.rate }}%"></div></div>
+          </div>
           {% empty %}
-          <div class="list-group-item small text-muted">아직 진행된 차시가 없습니다.</div>
+          <div class="list-group-item small text-muted">이 기간에 진행된 차시가 없습니다.</div>
           {% endfor %}
         </div>
       </div>
+
+      {% if stats.low %}
+      <div class="card shadow-sm mb-3 border-warning">
+        <div class="card-header bg-white py-2 small fw-bold">⚠ 제출 저조 학생 <span class="text-muted fw-normal">(진행 {{ stats.held }}차시 중 절반 이하)</span></div>
+        <div class="card-body py-2 small">
+          {% for s in stats.low %}
+          <a href="?mode=student&class={{ sel_class }}&student={{ s.student_id }}" class="me-2 text-decoration-none">
+            {{ s.student_id }} {{ s.name|default:"(이름 없음)" }} <span class="text-muted">{{ s.count }}회</span></a>{% if not forloop.last %}<br>{% endif %}
+          {% endfor %}
+          <div class="muted-sm mt-2">이 목록은 AI에 보내지 않고 사이트에서만 계산합니다.</div>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if saved_periods %}
+      <div class="card shadow-sm">
+        <div class="card-header bg-white py-2 small fw-bold">저장된 기간 분석</div>
+        <div class="list-group list-group-flush">
+          {% for r in saved_periods %}
+          {% with r.target|slice:":10" as s %}{% with r.target|slice:"11:" as e %}
+          <a href="?mode=period&class={{ sel_class }}&start={{ s }}&end={{ e }}"
+             class="list-group-item list-group-item-action side-item {% if s == start and e == end %}sel{% endif %}">
+            📒 {{ r.target }} <span class="muted-sm">{{ r.updated }}</span>
+          </a>
+          {% endwith %}{% endwith %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% else %}
+      <!-- 학생 목록 -->
+      <div class="card shadow-sm">
+        <div class="card-header bg-white py-2 small fw-bold d-flex justify-content-between">
+          <span>{{ sel_class }} 학생</span>
+          <span class="text-muted fw-normal">제출 횟수 · 📒 기록 있음</span>
+        </div>
+        <div class="list-group list-group-flush side-list">
+          {% for s in students %}
+          <a href="?mode=student&class={{ sel_class }}&student={{ s.student_id }}"
+             class="list-group-item list-group-item-action side-item d-flex gap-2 align-items-center
+                    {% if sel_student and sel_student.student_id == s.student_id %}sel{% endif %}">
+            <span class="muted-sm" style="width:22px">{{ s.num }}</span>
+            <span class="flex-grow-1">{{ s.name|default:"(미제출)" }}</span>
+            <span class="{% if s.count %}badge bg-primary{% else %}muted-sm{% endif %}">{{ s.count }}회</span>
+            <span style="width:16px">{% if s.has_report %}📒{% endif %}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
     </div>
 
-    <!-- 일지 편집 -->
+    <!-- ═══ 오른쪽: 편집 ═══ -->
     <div class="col-md-8">
-      {% if sel %}
+      {% if mode == 'student' and not sel_student %}
+      <div class="card shadow-sm"><div class="card-body text-center text-muted py-5">
+        왼쪽에서 학생을 고르세요.<br>
+        <span class="small">학생 한 명의 모든 차시 응답을 모아 탐구·진로·성장 흐름과 과세특 근거 문장을 정리합니다.</span>
+      </div></div>
+      {% else %}
       <div class="card shadow-sm">
-        <div class="card-header bg-white py-2">
-          <div class="d-flex justify-content-between align-items-center flex-wrap gap-1">
-            <span class="fw-bold">{{ sel.title }} <span class="text-muted small fw-normal">({{ sel.date }})</span></span>
-            <span class="small text-muted">
-              피드백 제출 {{ sel.submitted }}명
-              {% if sel.saved_at %} · 마지막 저장 {{ sel.saved_at }}{% endif %}
-            </span>
-          </div>
+        <div class="card-header bg-white py-2 d-flex justify-content-between align-items-center flex-wrap gap-1">
+          <span class="fw-bold">
+            {% if mode == 'period' %}{{ sel_class }} · {{ start }} ~ {{ end }}
+            <span class="text-muted small fw-normal">({{ stats.held }}개 차시 · 응답 {{ stats.total }}건)</span>
+            {% else %}{{ sel_student.student_id }} {{ sel_student.name }}
+            <span class="text-muted small fw-normal">(제출 {{ sel_student.count }}회)</span>{% endif %}
+          </span>
+          {% if saved_at %}<span class="small text-muted">마지막 저장 {{ saved_at }}</span>{% endif %}
         </div>
         <div class="card-body">
-          <form method="POST" id="journal-form">
+          <form method="POST">
             {% csrf_token %}
+            <input type="hidden" name="mode" value="{{ mode }}">
             <input type="hidden" name="class" value="{{ sel_class }}">
-            <input type="hidden" name="lesson_id" value="{{ sel.id }}">
+            {% if mode == 'period' %}
+            <input type="hidden" name="start" value="{{ start }}">
+            <input type="hidden" name="end" value="{{ end }}">
+            {% else %}
+            <input type="hidden" name="student" value="{{ sel_student.student_id }}">
+            {% endif %}
 
-            <label class="form-label small fw-bold mb-1">교사 메모 <span class="text-muted fw-normal">(선택 · 수업 주제나 특이사항을 적으면 일지가 정확해집니다)</span></label>
-            <input type="text" name="note" class="form-control form-control-sm mb-2" maxlength="500"
-                   value="{{ note }}" placeholder="예: 조건문 if-else 실습, 2모둠 발표, 프로젝터 고장으로 10분 지연">
+            <label class="form-label small fw-bold mb-1">교사 메모
+              <span class="text-muted fw-normal">(선택 ·
+              {% if mode == 'period' %}이 기간 단원명이나 수업 방식 변화를 적으면 분석이 정확해집니다{% else %}수업 중 직접 관찰한 모습을 적으면 함께 반영됩니다{% endif %})</span>
+            </label>
+            <input type="text" name="note" class="form-control form-control-sm mb-2" maxlength="500" value="{{ note }}"
+                   placeholder="{% if mode == 'period' %}예: 반복문 단원, 3주차부터 짝 코딩 도입{% else %}예: 모둠 프로젝트에서 발표 담당, 질문이 많음{% endif %}">
 
-            <div class="d-flex gap-2 mb-3 flex-wrap">
+            <div class="d-flex gap-2 mb-3 flex-wrap align-items-center">
               <button type="submit" name="action" value="generate" class="btn btn-warning btn-sm"
-                      {% if not sel.submitted %}disabled{% endif %}
-                      onclick="return confirmGenerate()">
-                ✨ {% if body %}AI로 다시 생성{% else %}AI 일지 생성{% endif %}
+                      {% if not can_generate %}disabled{% endif %} onclick="return confirmGenerate()">
+                ✨ {% if body %}AI로 다시 생성{% else %}AI {% if mode == 'period' %}기간 분석{% else %}누적 기록{% endif %} 생성{% endif %}
               </button>
-              {% if not sel.submitted %}
-              <span class="small text-muted align-self-center">제출된 피드백이 없어 생성할 수 없습니다.</span>
+              {% if not can_generate %}
+              <span class="small text-muted">{% if mode == 'period' %}이 기간에 제출된 피드백이 없습니다.{% else %}제출이 2회 이상인 학생만 생성할 수 있습니다.{% endif %}</span>
               {% endif %}
             </div>
 
-            <label class="form-label small fw-bold mb-1">수업일지</label>
             <textarea name="body" id="body" class="form-control mb-2"
-                      placeholder="'AI 일지 생성'을 누르면 초안이 여기에 나타납니다. 직접 작성해도 됩니다.">{{ body }}</textarea>
-
+                      placeholder="'생성'을 누르면 초안이 여기에 나타납니다. 직접 작성해도 됩니다.">{{ body }}</textarea>
             <div class="d-flex gap-2">
               <button type="submit" name="action" value="save" class="btn btn-primary btn-sm">💾 저장</button>
               <button type="button" class="btn btn-outline-secondary btn-sm" onclick="copyBody(this)">📋 복사</button>
             </div>
           </form>
           <p class="small text-muted mt-3 mb-0">
-            AI에는 학생 이름·학번 없이 응답 내용만 전달됩니다. 다만 '칭찬' 항목에 학생이 적은 친구 이름은 그대로 포함됩니다.
-            AI 초안은 반드시 확인 후 사용하세요.
+            AI에는 이름·학번 없이 응답 내용만 보냅니다{% if mode == 'student' %}. 다른 학생의 칭찬 문장 속 이 학생 이름은 '이 학생'으로 바꿔서 보냅니다{% else %}. 단, 학생이 응답에 직접 쓴 이름은 그대로 포함될 수 있습니다{% endif %}.
+            AI 초안은 반드시 확인한 뒤 사용하세요.
           </p>
-        </div>
-      </div>
-      {% else %}
-      <div class="card shadow-sm">
-        <div class="card-body text-center text-muted py-5">
-          왼쪽에서 차시를 고르세요.<br>
-          <span class="small">📒 표시는 이미 일지가 저장된 차시입니다.</span>
         </div>
       </div>
       {% endif %}
     </div>
   </div>
-
 </div>
 
-<!-- 생성 중 표시 -->
 <div id="loading" class="position-fixed top-0 start-0 w-100 h-100 d-none align-items-center justify-content-center"
      style="background:rgba(255,255,255,.75); z-index:2000">
   <div class="text-center">
     <div class="spinner-border text-warning mb-2"></div>
-    <div class="small">AI가 학생 피드백을 읽고 일지를 쓰는 중입니다… (10~20초)</div>
+    <div class="small">AI가 여러 차시 응답을 읽고 정리하는 중입니다… (10~25초)</div>
   </div>
 </div>
 
