@@ -12,7 +12,20 @@ import io
 import base64
 from collections import OrderedDict, defaultdict
 
+_SHEET_CACHE = {'sheet': None, 'at': 0}
+
+
 def get_sheet():
+    """구글 시트 첫 탭 반환. 인증·연결은 10분 동안 재사용해 페이지 이동을 빠르게 합니다."""
+    import time
+    if _SHEET_CACHE['sheet'] is not None and time.time() - _SHEET_CACHE['at'] < 600:
+        return _SHEET_CACHE['sheet']
+    sheet = _open_sheet()
+    _SHEET_CACHE['sheet'], _SHEET_CACHE['at'] = sheet, time.time()
+    return sheet
+
+
+def _open_sheet():
     scope = [
         'https://spreadsheets.google.com/feeds',
         'https://www.googleapis.com/auth/drive'
@@ -2282,15 +2295,39 @@ _JOURNAL_HEADERS = ['생성시각', '수업명', '반', '차시', '수업일',
 _JOURNAL_MODEL = os.environ.get('JOURNAL_MODEL', 'claude-haiku-5-5')
 
 
+_JOURNAL_CACHE = {'ws': None, 'rows': None, 'feedback': None, 'feedback_at': 0}
+_FEEDBACK_TTL = 60   # 피드백 원본은 60초 동안 재사용 (반 전환이 빨라짐)
+
+
 def _journal_sheet():
-    """수업일지 전용 탭 반환. 없으면 헤더까지 만들어서 생성."""
+    """수업일지 전용 탭 반환. 없으면 헤더까지 만들어서 생성. 한 번 찾으면 재사용."""
+    if _JOURNAL_CACHE['ws'] is not None:
+        return _JOURNAL_CACHE['ws']
     ss = get_sheet().spreadsheet
     try:
-        return ss.worksheet(_JOURNAL_SHEET_NAME)
+        ws = ss.worksheet(_JOURNAL_SHEET_NAME)
     except Exception:
         ws = ss.add_worksheet(title=_JOURNAL_SHEET_NAME, rows=1000, cols=len(_JOURNAL_HEADERS))
         ws.append_row(_JOURNAL_HEADERS)
-        return ws
+    _JOURNAL_CACHE['ws'] = ws
+    return ws
+
+
+def _cached_feedback_rows(force=False):
+    """피드백 시트 전체 값 (60초 캐시)"""
+    import time
+    if (force or _JOURNAL_CACHE['feedback'] is None
+            or time.time() - _JOURNAL_CACHE['feedback_at'] > _FEEDBACK_TTL):
+        _JOURNAL_CACHE['feedback'] = get_sheet().get_all_values()
+        _JOURNAL_CACHE['feedback_at'] = time.time()
+    return _JOURNAL_CACHE['feedback']
+
+
+def _cached_journals(force=False):
+    """수업일지 시트 (저장할 때만 다시 읽음)"""
+    if force or _JOURNAL_CACHE['rows'] is None:
+        _JOURNAL_CACHE['rows'] = _journal_rows(_journal_sheet())
+    return _JOURNAL_CACHE['rows']
 
 
 def _journal_rows(ws):
@@ -2425,11 +2462,15 @@ def teacher_journal(request):
     error = None
     message = None
     feedback_rows, journals, ws = [], {}, None
+    is_post = request.method == 'POST'
     try:
-        feedback_rows = get_sheet().get_all_values()
+        # 저장·생성 때는 최신 값으로, 단순 조회(반·차시 이동)는 캐시로 빠르게
+        feedback_rows = _cached_feedback_rows(force=is_post)
         ws = _journal_sheet()
-        journals = _journal_rows(ws)
+        journals = _cached_journals(force=is_post)
     except Exception as e:
+        _JOURNAL_CACHE['ws'] = None
+        _SHEET_CACHE['sheet'] = None
         error = f'구글 시트 불러오기 오류: {e}'
 
     sel_lesson = next((l for l in LESSONS if l['id'] == sel_lesson_id
@@ -2466,7 +2507,7 @@ def teacher_journal(request):
                     error = f'시트 저장 오류: {e}'
             editor_note, editor_body = note, body
         try:
-            journals = _journal_rows(ws)
+            journals = _cached_journals(force=True)
         except Exception:
             pass
     elif sel_lesson and sel_lesson['title'] in journals:
@@ -2525,7 +2566,7 @@ def teacher_journal_excel(request):
 
     filter_class = request.GET.get('class', '')
     try:
-        journals = list(_journal_rows(_journal_sheet()).values())
+        journals = list(_cached_journals(force=True).values())
     except Exception as e:
         return HttpResponse(f'구글 시트 불러오기 오류: {e}', status=500)
     if filter_class:
