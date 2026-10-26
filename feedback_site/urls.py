@@ -26,6 +26,9 @@ urlpatterns = [
     # ── 피드백 리포트 ──
     path('teacher/report/', views.teacher_report, name='teacher_report'),
     path('teacher/report/excel/', views.teacher_report_excel, name='teacher_report_excel'),
+    # ── 수업일지 ──
+    path('teacher/journal/', views.teacher_journal, name='teacher_journal'),
+    path('teacher/journal/excel/', views.teacher_journal_excel, name='teacher_journal_excel'),
     # ── 학번 검증/정정 ──
     path('teacher/validate/', views.teacher_validate_ids, name='teacher_validate_ids'),
     path('teacher/validate/excel/', views.teacher_validate_excel, name='teacher_validate_excel'),
