@@ -2454,7 +2454,7 @@ def _student_records(rows, student_id):
 
 # ── Claude 호출 ─────────────────────────────────────────────────
 
-def _ask_claude(prompt, max_tokens=1800):
+def _ask_claude(prompt, max_tokens=4000):
     api_key = os.environ.get('ANTHROPIC_API_KEY', '')
     if not api_key:
         return None, 'ANTHROPIC_API_KEY가 설정되어 있지 않습니다.'
@@ -2465,7 +2465,14 @@ def _ask_claude(prompt, max_tokens=1800):
             model=_JOURNAL_MODEL, max_tokens=max_tokens,
             messages=[{'role': 'user', 'content': prompt}],
         )
-        return msg.content[0].text.strip(), None
+        # 최신 모델은 답변 앞에 '생각(thinking)' 블록을 붙일 수 있으므로 text 블록만 모음
+        text = ''.join(getattr(b, 'text', '') for b in msg.content
+                       if getattr(b, 'type', '') == 'text').strip()
+        if not text:
+            if getattr(msg, 'stop_reason', '') == 'max_tokens':
+                return None, 'AI 응답이 길이 제한에 걸렸습니다. 기간을 줄여 다시 시도해 주세요.'
+            return None, 'AI가 빈 응답을 보냈습니다. 잠시 후 다시 시도해 주세요.'
+        return text, None
     except Exception as e:
         print(f"AI 리포트 생성 오류: {e}")
         return None, f'AI 생성 중 오류가 발생했습니다: {e}'
