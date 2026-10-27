@@ -2292,7 +2292,7 @@ def cloud_data(request, code):
 _REPORT_SHEET_NAME = 'AI리포트'
 _REPORT_HEADERS = ['생성시각', '종류', '반', '대상', '키', '교사메모', '본문', '수정시각']
 # Render 무료 플랜(gunicorn 기본 30초 제한) 안에서 끝나도록 빠른 모델을 기본값으로 사용
-_JOURNAL_MODEL = os.environ.get('JOURNAL_MODEL', 'claude-haiku-5-5')
+_JOURNAL_MODEL = os.environ.get('JOURNAL_MODEL', 'claude-haiku-4-5-20251001')
 _JOURNAL_CACHE = {'ws': None, 'rows': None, 'feedback': None, 'feedback_at': 0}
 _FEEDBACK_TTL = 60   # 피드백 원본은 60초 동안 재사용 (반·학생 전환이 빨라짐)
 
@@ -2460,7 +2460,7 @@ def _ask_claude(prompt, max_tokens=4000):
         return None, 'ANTHROPIC_API_KEY가 설정되어 있지 않습니다.'
     try:
         import anthropic
-        client = anthropic.Anthropic(api_key=api_key, timeout=25.0, max_retries=0)
+        client = anthropic.Anthropic(api_key=api_key, timeout=120.0, max_retries=1)
         msg = client.messages.create(
             model=_JOURNAL_MODEL, max_tokens=max_tokens,
             messages=[{'role': 'user', 'content': prompt}],
@@ -2554,6 +2554,55 @@ def _student_prompt(class_name, records, praised, note):
 ■ 진로 연결 (반복해서 언급한 진로·관심 분야와 수업 내용의 연결)
 ■ 동료 관계 (다른 학생의 칭찬에서 드러난 모습)
 ■ 과세특 근거 문장 후보 (생활기록부에 옮길 수 있는 관찰 문장 3~4개, '~함', '~임'체, 근거 차시 표시)"""
+
+
+# ── 백그라운드 생성 ──────────────────────────────────────────────
+#  Render(gunicorn)는 요청이 30초를 넘으면 끊기므로, AI 생성은 별도 스레드에서 하고
+#  화면은 몇 초마다 상태를 확인합니다.
+
+_JOBS = {}   # {키: {'status': 'running'|'done'|'error', 'error': str, 'started': 'YYYY-MM-DD HH:MM'}}
+
+
+def _start_job(key, prompt, kind, class_name, target, note):
+    import time
+    started = datetime.now().strftime('%Y-%m-%d %H:%M')
+    _JOBS[key] = {'status': 'running', 'error': '', 'started': started, 't': time.time()}
+
+    def work():
+        body, err = _ask_claude(prompt)
+        if err:
+            _JOBS[key].update(status='error', error=err)
+            return
+        try:
+            _report_upsert(kind, class_name, target, key, note, body, True)
+            _JOBS[key]['status'] = 'done'
+        except Exception as e:
+            _JOBS[key].update(status='error', error=f'생성은 됐지만 시트 저장에 실패했습니다: {e}')
+    threading.Thread(target=work, daemon=True).start()
+    return started
+
+
+def teacher_journal_status(request):
+    """생성 진행 상태 확인 (화면이 3초마다 호출)"""
+    from django.http import JsonResponse
+    import time
+    if not request.session.get('teacher_auth'):
+        return JsonResponse({'status': 'error', 'error': '로그인이 필요합니다.'})
+    key = request.GET.get('key', '')
+    since = request.GET.get('since', '')
+    job = _JOBS.get(key)
+    if job:
+        if job['status'] == 'running' and time.time() - job['t'] > 240:
+            return JsonResponse({'status': 'error', 'error': '생성 시간이 너무 오래 걸립니다. 다시 시도해 주세요.'})
+        return JsonResponse({'status': job['status'], 'error': job['error']})
+    # 다른 서버 프로세스가 처리한 경우: 시트에 새로 저장됐는지로 판단
+    try:
+        r = _cached_reports(force=True).get(key)
+        if r and r['created'] >= since:
+            return JsonResponse({'status': 'done', 'error': ''})
+    except Exception:
+        pass
+    return JsonResponse({'status': 'running', 'error': ''})
 
 
 # ── View ────────────────────────────────────────────────────────
@@ -2652,16 +2701,12 @@ def teacher_journal(request):
             else:
                 _, records, praised = _student_records(rows, sid)
                 prompt = _student_prompt(sel_class, records, praised, note)
-            body, gen_error = _ask_claude(prompt)
-            if gen_error:
-                error, ctx['body'] = gen_error, P.get('body', '')
+            ctx['body'] = P.get('body', '')
+            if _JOBS.get(key, {}).get('status') != 'running':
+                ctx['job_since'] = _start_job(key, prompt, kind, sel_class, target, note)
             else:
-                ctx['body'] = body
-                try:
-                    _report_upsert(kind, sel_class, target, key, note, body, True)
-                    message = 'AI 초안을 만들어 저장했습니다. 확인하고 필요한 부분을 고친 뒤 다시 저장하세요.'
-                except Exception as e:
-                    error = f'생성은 됐지만 시트 저장에 실패했습니다: {e}'
+                ctx['job_since'] = _JOBS[key]['started']
+            ctx['job_key'] = key
         elif action == 'save':
             body = P.get('body', '').strip()
             ctx['body'] = body
@@ -2687,6 +2732,16 @@ def teacher_journal(request):
         [r for r in reports.values() if r['kind'] == '기간분석' and r['class_name'] == sel_class],
         key=lambda r: r['target'], reverse=True)
     ctx['report_count'] = sum(1 for r in reports.values() if r['class_name'] == sel_class)
+    if not is_post and P.get('done') == '1' and ctx['body']:
+        message = 'AI 초안을 만들어 저장했습니다. 확인하고 필요한 부분을 고친 뒤 다시 저장하세요.'
+    # 생성 완료 후 돌아올 주소
+    from urllib.parse import urlencode
+    back = {'mode': mode, 'class': sel_class, 'done': '1'}
+    if mode == 'period':
+        back.update(start=ctx['start'], end=ctx['end'])
+    elif ctx.get('sel_student'):
+        back['student'] = ctx['sel_student']['student_id']
+    ctx['back_url'] = '?' + urlencode(back)
     ctx.update({'error': error, 'message': message})
     return render(request, 'feedback/teacher_journal.html', ctx)
 

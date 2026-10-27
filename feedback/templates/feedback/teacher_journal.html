@@ -222,16 +222,42 @@
      style="background:rgba(255,255,255,.75); z-index:2000">
   <div class="text-center">
     <div class="spinner-border text-warning mb-2"></div>
-    <div class="small">AI가 여러 차시 응답을 읽고 정리하는 중입니다… (10~25초)</div>
+    <div class="small">AI가 응답을 읽고 정리하는 중입니다… <span id="elapsed"></span></div>
+    <div class="muted-sm mt-1">창을 닫아도 생성은 계속되고, 끝나면 자동 저장됩니다.</div>
   </div>
 </div>
+<div id="job-error" class="alert alert-danger position-fixed bottom-0 start-50 translate-middle-x mb-3 d-none small" style="z-index:2100"></div>
 
 <script>
+  function showLoading() {
+    var l = document.getElementById('loading');
+    l.classList.remove('d-none'); l.classList.add('d-flex');
+  }
+  {% if job_key %}
+  (function () {
+    showLoading();
+    var t0 = Date.now();
+    var url = '/teacher/journal/status/?key=' + encodeURIComponent('{{ job_key|escapejs }}') +
+              '&since=' + encodeURIComponent('{{ job_since|escapejs }}');
+    function poll() {
+      document.getElementById('elapsed').textContent = '(' + Math.round((Date.now() - t0) / 1000) + '초)';
+      fetch(url, {credentials: 'same-origin'}).then(function (r) { return r.json(); }).then(function (d) {
+        if (d.status === 'done') { location.href = '{{ back_url|escapejs }}'; return; }
+        if (d.status === 'error') {
+          var l = document.getElementById('loading'); l.classList.add('d-none'); l.classList.remove('d-flex');
+          var e = document.getElementById('job-error'); e.textContent = d.error; e.classList.remove('d-none');
+          return;
+        }
+        setTimeout(poll, 3000);
+      }).catch(function () { setTimeout(poll, 5000); });
+    }
+    setTimeout(poll, 3000);
+  })();
+  {% endif %}
   function confirmGenerate() {
     var body = document.getElementById('body').value.trim();
     if (body && !confirm('지금 내용이 AI 새 초안으로 바뀝니다. 계속할까요?')) return false;
-    var l = document.getElementById('loading');
-    l.classList.remove('d-none'); l.classList.add('d-flex');
+    showLoading();
     return true;
   }
   function copyBody(btn) {
