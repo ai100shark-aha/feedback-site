@@ -3201,42 +3201,79 @@ def _escape_rank(rows, key_fn, final_key='final'):
     return out
 
 
+def _escape_date(r):
+    try:
+        return datetime.strptime(r['date'], '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _escape_period_rows(rows, period, today=None):
+    """period: 'weekly'(이번 주) | 'monthly'(이번 달) | 'semester'(전체 누적)"""
+    today = today or datetime.now().date()
+    if period == 'monthly':
+        prefix = today.strftime('%Y-%m')
+        return [r for r in rows if r['date'].startswith(prefix)]
+    if period == 'semester':
+        return list(rows)
+    # weekly (기본값)
+    week_start = today - timedelta(days=today.weekday())   # 이번주 월요일
+    return [r for r in rows if (_escape_date(r) and _escape_date(r) >= week_start)]
+
+
+def _escape_unpack_personal(ranked):
+    out = []
+    for i, g in enumerate(ranked, start=1):
+        sid, sname, cname = g['key']
+        out.append({'rank': i, 'student_id': sid, 'student_name': sname,
+                    'class_name': cname, 'avg_final': g['avg_final'], 'count': g['count']})
+    return out
+
+
+def _escape_unpack_class(ranked):
+    out = []
+    for i, g in enumerate(ranked, start=1):
+        out.append({'rank': i, 'class_name': g['key'], 'avg_final': g['avg_final'], 'count': g['count']})
+    return out
+
+
+_ESCAPE_PERIOD_LABELS = {'weekly': '이번 주', 'monthly': '이번 달', 'semester': '학기 전체(누적)'}
+
+
 def escape_teacher(request):
-    """교사용: 매일방탈출 주간/월간/반별 순위"""
+    """교사용: 매일방탈출 기간별(주간/월간/학기) 순위 + 이달의 시상"""
     if not request.session.get('teacher_auth'):
         return redirect('teacher_dashboard')
 
     rows = _escape_rows() or []
     today = datetime.now().date()
-    week_start = today - timedelta(days=today.weekday())   # 이번주 월요일
-    month_prefix = today.strftime('%Y-%m')
 
-    def _d(r):
-        try:
-            return datetime.strptime(r['date'], '%Y-%m-%d').date()
-        except Exception:
-            return None
+    # ── 기간 선택 (주간/월간/학기) ──
+    period = request.GET.get('period', 'weekly')
+    if period not in _ESCAPE_PERIOD_LABELS:
+        period = 'weekly'
+    period_rows = _escape_period_rows(rows, period, today)
 
-    weekly_rows  = [r for r in rows if (_d(r) and _d(r) >= week_start)]
-    monthly_rows = [r for r in rows if r['date'].startswith(month_prefix)]
+    personal_rank = _escape_rank(period_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
+    class_rank    = _escape_rank(period_rows, lambda r: r['class_name'])
 
-    weekly_personal  = _escape_rank(weekly_rows,  lambda r: (r['student_id'], r['student_name'], r['class_name']))
-    monthly_personal = _escape_rank(monthly_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
-    class_rank       = _escape_rank(weekly_rows,  lambda r: r['class_name'])
-
-    def _unpack_personal(ranked):
-        out = []
-        for i, g in enumerate(ranked, start=1):
-            sid, sname, cname = g['key']
-            out.append({'rank': i, 'student_id': sid, 'student_name': sname,
-                        'class_name': cname, 'avg_final': g['avg_final'], 'count': g['count']})
-        return out
-
-    def _unpack_class(ranked):
-        out = []
-        for i, g in enumerate(ranked, start=1):
-            out.append({'rank': i, 'class_name': g['key'], 'avg_final': g['avg_final'], 'count': g['count']})
-        return out
+    # ── 이달의 시상 (선택된 기간과 무관하게 항상 '이번 달' 기준) ──
+    month_rows = _escape_period_rows(rows, 'monthly', today)
+    grade_award = _escape_unpack_personal(
+        _escape_rank(month_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
+    )[:3]
+    class_awards = {}
+    for cls in CLASS_ORDER:
+        cls_rows = [r for r in month_rows if r['class_name'] == cls]
+        if not cls_rows:
+            continue
+        ranked = _escape_rank(cls_rows, lambda r: (r['student_id'], r['student_name']))
+        top3 = []
+        for i, g in enumerate(ranked[:3], start=1):
+            sid, sname = g['key']
+            top3.append({'rank': i, 'student_id': sid, 'student_name': sname,
+                         'avg_final': g['avg_final'], 'count': g['count']})
+        class_awards[cls] = top3
 
     # 반별 문제 미리보기: 요청 시에만 생성(캐시 활용) — 대시보드 열 때마다 전체 반을 AI로 생성하지 않도록
     preview_class = request.GET.get('preview_class', '').strip()
@@ -3252,7 +3289,12 @@ def escape_teacher(request):
         'preview_class': preview_class,
         'preview_questions': preview_questions,
         'preview_lessons': preview_lessons,
-        'weekly':  _unpack_personal(weekly_personal)[:30],
-        'monthly': _unpack_personal(monthly_personal)[:30],
-        'class_rank': _unpack_class(class_rank),
+        'period': period,
+        'period_label': _ESCAPE_PERIOD_LABELS[period],
+        'period_options': [('weekly', '주간'), ('monthly', '월간'), ('semester', '학기')],
+        'personal':   _escape_unpack_personal(personal_rank)[:30],
+        'class_rank': _escape_unpack_class(class_rank),
+        'this_month': today.strftime('%Y년 %m월'),
+        'grade_award': grade_award,
+        'class_awards': class_awards,
     })
