@@ -2802,9 +2802,15 @@ def teacher_journal_excel(request):
 
 _ESCAPE_SHEET_NAME = '방탈출'
 _ESCAPE_HINT_PENALTY_SEC = 20   # 힌트 1회당 추가되는 페널티(초)
+_ESCAPE_WRONG_PENALTY_SEC = 15  # 오답 1회당 추가되는 페널티(초)
 
-# 테스트 범위 문제 세트: 함수와 라이브러리 / 지역·전역변수 (추후 교체 가능)
-_ESCAPE_QUESTIONS = [
+# AI 출제에 쓸 "최근 피드백" 신호가 충분한지 판단하는 기준
+_ESCAPE_FEEDBACK_MIN_STUDENTS = 5     # 최근 2~3차시 합쳐서 이 인원 미만이면 피드백 신호 사용 안 함
+_ESCAPE_FEEDBACK_MIN_CHARS    = 80    # 어려움·심화질문 텍스트를 합쳐 이 길이 미만이면 사용 안 함
+
+# 폴백(fallback) 문제 세트: AI 출제가 불가능하거나 실패할 때 항상 이걸로 대체됨
+# (지도서 데이터가 없거나, API 키가 없거나, 생성 결과 형식이 깨졌을 때 등)
+_ESCAPE_FALLBACK_QUESTIONS = [
     {
         'topic': '함수와 라이브러리',
         'q': "다음 중 '함수'를 사용하는 가장 큰 이유로 가장 알맞은 것은?",
@@ -2832,6 +2838,171 @@ _ESCAPE_QUESTIONS = [
         'hint': "'지역(地域)'이라는 한자의 뜻처럼, 특정 '구역'에서만 쓸 수 있는 변수입니다.",
     },
 ]
+
+# 생성된 문제는 (반, 날짜) 단위로 캐시 — 같은 날 같은 반 학생은 모두 같은 3문제를 품
+_ESCAPE_DAILY_CACHE = {}
+
+
+def _escape_recent_lessons(class_name, n=3):
+    """해당 반의 '오늘' 이전에 이미 진행된 최근 n개 차시를 날짜 오름차순으로 반환."""
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    lessons = [l for l in LESSONS if l['class'] == class_name and l['date'] < today_str]
+    lessons.sort(key=lambda l: l['date'])
+    return lessons[-n:]
+
+
+def _escape_feedback_signal(class_name, lessons):
+    """최근 차시들에 대한 그 반 학생들의 '어려움'·'심화질문' 피드백을 모아 반환.
+    반환값: (합쳐진 텍스트, 응답한 학생 수)
+    """
+    if not lessons:
+        return '', 0
+    titles = {l['title'] for l in lessons}
+    try:
+        sheet = get_sheet()
+        rows = sheet.get_all_values()[1:]
+    except Exception as e:
+        print(f"방탈출 피드백 신호 읽기 오류: {e}")
+        return '', 0
+
+    texts = []
+    seen_students = set()
+    for r in rows:
+        # 실제 시트 레이아웃: [1]=수업명, [2]=학번, [6]=문제해결(어려움), [8]=심화학습
+        if len(r) < 9 or r[1] not in titles:
+            continue
+        problem = (r[6] or '').strip()
+        deep    = (r[8] or '').strip()
+        if problem:
+            texts.append(f"- (어려웠던 점) {problem}")
+        if deep:
+            texts.append(f"- (더 알고 싶은 점) {deep}")
+        if problem or deep:
+            seen_students.add(r[2])
+
+    return '\n'.join(texts), len(seen_students)
+
+
+def _escape_textbook_context(lessons, max_chars=6000):
+    """최근 차시들의 지도서 원문(QuizSet.range_text)을 모아 반환."""
+    if not lessons:
+        return ''
+    chapter_nums = sorted({l['id'] % 100 for l in lessons})
+    qsets = QuizSet.objects.filter(chapter_num__in=chapter_nums).order_by('chapter_num')
+    parts = []
+    for qs in qsets:
+        body = (qs.range_text or '').strip()
+        if body:
+            parts.append(f"[{qs.title}]\n{body}")
+    return '\n\n'.join(parts)[:max_chars]
+
+
+def _escape_parse_ai_questions(raw_text):
+    """Claude 응답에서 JSON 배열을 추출·검증. 실패하거나 형식이 안 맞으면 None."""
+    m = re.search(r'\[[\s\S]*\]', raw_text)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group())
+    except Exception:
+        return None
+    valid = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        if not all(k in item for k in ('topic', 'q', 'choices', 'answer', 'hint')):
+            continue
+        choices = item['choices']
+        answer = item['answer']
+        if not isinstance(choices, list) or len(choices) != 4:
+            continue
+        if not isinstance(answer, int) or not (0 <= answer < 4):
+            continue
+        valid.append({
+            'topic': str(item['topic'])[:60], 'q': str(item['q']),
+            'choices': [str(c) for c in choices], 'answer': answer,
+            'hint': str(item['hint']),
+        })
+    return valid if len(valid) == 3 else None
+
+
+def _escape_generate_questions(class_name):
+    """해당 반의 '오늘의 방탈출' 3문제를 생성.
+    지도서 원문(정답 근거) + 최근 2~3차시 학생 피드백(출제 우선순위 힌트)을 함께 사용.
+    피드백 신호가 부족하거나, 지도서 데이터가 없거나, API 호출이 실패하면
+    조용히 폴백 문제 세트로 대체한다 (절대 빈 화면이 뜨지 않도록).
+    """
+    lessons = _escape_recent_lessons(class_name, n=3)
+    textbook = _escape_textbook_context(lessons)
+    if not textbook:
+        return list(_ESCAPE_FALLBACK_QUESTIONS)
+
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return list(_ESCAPE_FALLBACK_QUESTIONS)
+
+    feedback_text, n_students = _escape_feedback_signal(class_name, lessons)
+    use_feedback = (n_students >= _ESCAPE_FEEDBACK_MIN_STUDENTS
+                     and len(feedback_text) >= _ESCAPE_FEEDBACK_MIN_CHARS)
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        lesson_titles = ', '.join(l['title'] for l in lessons)
+
+        prompt = f"""당신은 고등학교 정보 교과 교사입니다.
+아래는 {class_name}의 최근 수업({lesson_titles}) 지도서 원문입니다. 이 내용을 '정답의 유일한 근거'로 삼아
+수업 시작 전 복습용 4지선다 객관식 문제 정확히 3개를 만들어 주세요.
+
+--- 지도서 원문 ---
+{textbook}
+---
+
+요구사항:
+- 반드시 지도서 원문에 명시된 내용만으로 정답·보기를 구성하세요 (원문에 없는 내용 추측·창작 금지)
+- 선택지 4개 중 정답은 1개, 오답 3개는 그럴듯하지만 명확히 틀리게 만드세요
+- 힌트(hint)는 정답을 직접 말하지 않으면서 생각할 방향을 알려주는 1문장
+- topic은 해당 문제가 다루는 개념 이름(짧게)
+"""
+        if use_feedback:
+            prompt += f"""
+--- 참고: 이 반 학생들이 최근 수업에서 어려워하거나 궁금해한 점 ---
+{feedback_text[:3000]}
+---
+위 내용은 '어떤 개념을 우선 출제할지' 정하는 참고 자료로만 쓰세요. 정답·보기는 반드시 지도서 원문에만 근거하세요.
+"""
+
+        prompt += """
+아래 JSON 배열 형식으로만 응답하세요 (설명·마크다운 없이):
+[
+  {"topic": "개념명", "q": "문제 전문", "choices": ["보기1","보기2","보기3","보기4"], "answer": 0, "hint": "힌트 1문장"}
+]"""
+
+        msg = client.messages.create(
+            model='claude-sonnet-4-20250514',
+            max_tokens=2048,
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        raw = msg.content[0].text
+        parsed = _escape_parse_ai_questions(raw)
+        if parsed:
+            return parsed
+    except Exception as e:
+        print(f"방탈출 문제 생성 오류: {e}")
+
+    return list(_ESCAPE_FALLBACK_QUESTIONS)
+
+
+def _escape_get_daily_questions(class_name):
+    """오늘·이 반의 3문제를 캐시에서 가져오거나, 없으면 생성해서 캐시에 저장."""
+    today = datetime.now().strftime('%Y-%m-%d')
+    key = f"{class_name}|{today}"
+    cached = _ESCAPE_DAILY_CACHE.get(key)
+    if cached:
+        return cached
+    questions = _escape_generate_questions(class_name)
+    _ESCAPE_DAILY_CACHE[key] = questions
+    return questions
 
 
 def _escape_sheet():
@@ -2915,15 +3086,20 @@ def escape_start(request):
                     'already': True, 'result': done,
                 })
 
+            class_name = _class_from_student_id(student_id)
             request.session['escape_student'] = {
                 'student_id': student_id, 'student_num': student_num,
                 'student_name': student_name,
-                'class_name': _class_from_student_id(student_id),
+                'class_name': class_name,
             }
+            # 그 반의 '오늘의 방탈출' 3문제를 세션에 그대로 스냅샷으로 저장.
+            # (진행 중에 캐시가 새로 생성되더라도 이미 시작한 학생의 문제는 바뀌지 않도록)
+            request.session['escape_questions'] = _escape_get_daily_questions(class_name)
             request.session['escape_start_at'] = datetime.now().isoformat()
             request.session['escape_q'] = 0
             request.session['escape_hints'] = 0
             request.session['escape_hint_seen'] = []
+            request.session['escape_wrong'] = 0
             return redirect('escape_play')
 
     return render(request, 'feedback/escape_start.html', {'error': error})
@@ -2932,7 +3108,8 @@ def escape_start(request):
 def escape_play(request):
     """학생용: 문제 1문제씩 출제, 힌트 요청, 정답 체크 → 3문제 완료 시 결과 저장"""
     student = request.session.get('escape_student')
-    if not student:
+    questions = request.session.get('escape_questions')
+    if not student or not questions:
         return redirect('escape_start')
 
     qidx = request.session.get('escape_q', 0)
@@ -2952,26 +3129,27 @@ def escape_play(request):
                 choice = int(request.POST.get('choice', -1))
             except ValueError:
                 choice = -1
-            if choice == _ESCAPE_QUESTIONS[qidx]['answer']:
+            if choice == questions[qidx]['answer']:
                 qidx += 1
                 request.session['escape_q'] = qidx
-                if qidx >= len(_ESCAPE_QUESTIONS):
+                if qidx >= len(questions):
                     return _escape_finish(request)
                 return redirect('escape_play')
             else:
+                request.session['escape_wrong'] = request.session.get('escape_wrong', 0) + 1
                 return render(request, 'feedback/escape_play.html', {
-                    'q': _ESCAPE_QUESTIONS[qidx], 'qidx': qidx,
-                    'total': len(_ESCAPE_QUESTIONS),
+                    'q': questions[qidx], 'qidx': qidx,
+                    'total': len(questions),
                     'hint_seen': qidx in request.session.get('escape_hint_seen', []),
                     'wrong': True,
                 })
 
-    if qidx >= len(_ESCAPE_QUESTIONS):
+    if qidx >= len(questions):
         return _escape_finish(request)
 
     return render(request, 'feedback/escape_play.html', {
-        'q': _ESCAPE_QUESTIONS[qidx], 'qidx': qidx,
-        'total': len(_ESCAPE_QUESTIONS),
+        'q': questions[qidx], 'qidx': qidx,
+        'total': len(questions),
         'hint_seen': qidx in request.session.get('escape_hint_seen', []),
         'wrong': False,
     })
@@ -2982,12 +3160,13 @@ def _escape_finish(request):
     student = request.session.get('escape_student')
     start_at = request.session.get('escape_start_at')
     hints = request.session.get('escape_hints', 0)
+    wrong = request.session.get('escape_wrong', 0)
     try:
         start_dt = datetime.fromisoformat(start_at)
     except Exception:
         start_dt = datetime.now()
     duration = max(0, (datetime.now() - start_dt).total_seconds())
-    penalty = hints * _ESCAPE_HINT_PENALTY_SEC
+    penalty = hints * _ESCAPE_HINT_PENALTY_SEC + wrong * _ESCAPE_WRONG_PENALTY_SEC
     final = duration + penalty
     today = datetime.now().strftime('%Y-%m-%d')
 
@@ -2995,8 +3174,8 @@ def _escape_finish(request):
         'date': today, 'student_id': student['student_id'],
         'student_num': student['student_num'], 'student_name': student['student_name'],
         'class_name': student['class_name'],
-        'duration': round(duration, 1), 'hints': hints,
-        'penalty': penalty, 'final': round(duration + penalty, 1),
+        'duration': round(duration, 1), 'hints': hints, 'wrong': wrong,
+        'penalty': penalty, 'final': round(final, 1),
     }
     _escape_log([
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'), today,
@@ -3004,7 +3183,8 @@ def _escape_finish(request):
         student['class_name'], result['duration'], hints, penalty, result['final'],
     ])
 
-    for k in ('escape_student', 'escape_start_at', 'escape_q', 'escape_hints', 'escape_hint_seen'):
+    for k in ('escape_student', 'escape_questions', 'escape_start_at',
+              'escape_q', 'escape_hints', 'escape_hint_seen', 'escape_wrong'):
         request.session.pop(k, None)
 
     return render(request, 'feedback/escape_result.html', {
@@ -3025,47 +3205,101 @@ def _escape_rank(rows, key_fn, final_key='final'):
     return out
 
 
+def _escape_date(r):
+    try:
+        return datetime.strptime(r['date'], '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+
+def _escape_period_rows(rows, period, today=None):
+    """period: 'weekly'(이번 주) | 'monthly'(이번 달) | 'semester'(전체 누적)"""
+    today = today or datetime.now().date()
+    if period == 'monthly':
+        prefix = today.strftime('%Y-%m')
+        return [r for r in rows if r['date'].startswith(prefix)]
+    if period == 'semester':
+        return list(rows)
+    # weekly (기본값)
+    week_start = today - timedelta(days=today.weekday())   # 이번주 월요일
+    return [r for r in rows if (_escape_date(r) and _escape_date(r) >= week_start)]
+
+
+def _escape_unpack_personal(ranked):
+    out = []
+    for i, g in enumerate(ranked, start=1):
+        sid, sname, cname = g['key']
+        out.append({'rank': i, 'student_id': sid, 'student_name': sname,
+                    'class_name': cname, 'avg_final': g['avg_final'], 'count': g['count']})
+    return out
+
+
+def _escape_unpack_class(ranked):
+    out = []
+    for i, g in enumerate(ranked, start=1):
+        out.append({'rank': i, 'class_name': g['key'], 'avg_final': g['avg_final'], 'count': g['count']})
+    return out
+
+
+_ESCAPE_PERIOD_LABELS = {'weekly': '이번 주', 'monthly': '이번 달', 'semester': '학기 전체(누적)'}
+
+
 def escape_teacher(request):
-    """교사용: 매일방탈출 주간/월간/반별 순위"""
+    """교사용: 매일방탈출 기간별(주간/월간/학기) 순위 + 이달의 시상"""
     if not request.session.get('teacher_auth'):
         return redirect('teacher_dashboard')
 
     rows = _escape_rows() or []
     today = datetime.now().date()
-    week_start = today - timedelta(days=today.weekday())   # 이번주 월요일
-    month_prefix = today.strftime('%Y-%m')
 
-    def _d(r):
-        try:
-            return datetime.strptime(r['date'], '%Y-%m-%d').date()
-        except Exception:
-            return None
+    # ── 기간 선택 (주간/월간/학기) ──
+    period = request.GET.get('period', 'weekly')
+    if period not in _ESCAPE_PERIOD_LABELS:
+        period = 'weekly'
+    period_rows = _escape_period_rows(rows, period, today)
 
-    weekly_rows  = [r for r in rows if (_d(r) and _d(r) >= week_start)]
-    monthly_rows = [r for r in rows if r['date'].startswith(month_prefix)]
+    personal_rank = _escape_rank(period_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
+    class_rank    = _escape_rank(period_rows, lambda r: r['class_name'])
 
-    weekly_personal  = _escape_rank(weekly_rows,  lambda r: (r['student_id'], r['student_name'], r['class_name']))
-    monthly_personal = _escape_rank(monthly_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
-    class_rank       = _escape_rank(weekly_rows,  lambda r: r['class_name'])
+    # ── 이달의 시상 (선택된 기간과 무관하게 항상 '이번 달' 기준) ──
+    month_rows = _escape_period_rows(rows, 'monthly', today)
+    grade_award = _escape_unpack_personal(
+        _escape_rank(month_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
+    )[:3]
+    class_awards = {}
+    for cls in CLASS_ORDER:
+        cls_rows = [r for r in month_rows if r['class_name'] == cls]
+        if not cls_rows:
+            continue
+        ranked = _escape_rank(cls_rows, lambda r: (r['student_id'], r['student_name']))
+        top3 = []
+        for i, g in enumerate(ranked[:3], start=1):
+            sid, sname = g['key']
+            top3.append({'rank': i, 'student_id': sid, 'student_name': sname,
+                         'avg_final': g['avg_final'], 'count': g['count']})
+        class_awards[cls] = top3
 
-    def _unpack_personal(ranked):
-        out = []
-        for i, g in enumerate(ranked, start=1):
-            sid, sname, cname = g['key']
-            out.append({'rank': i, 'student_id': sid, 'student_name': sname,
-                        'class_name': cname, 'avg_final': g['avg_final'], 'count': g['count']})
-        return out
-
-    def _unpack_class(ranked):
-        out = []
-        for i, g in enumerate(ranked, start=1):
-            out.append({'rank': i, 'class_name': g['key'], 'avg_final': g['avg_final'], 'count': g['count']})
-        return out
+    # 반별 문제 미리보기: 요청 시에만 생성(캐시 활용) — 대시보드 열 때마다 전체 반을 AI로 생성하지 않도록
+    preview_class = request.GET.get('preview_class', '').strip()
+    preview_questions = None
+    preview_lessons = []
+    if preview_class in CLASS_ORDER:
+        preview_lessons = _escape_recent_lessons(preview_class, n=3)
+        preview_questions = _escape_get_daily_questions(preview_class)
 
     return render(request, 'feedback/escape_teacher.html', {
-        'questions': _ESCAPE_QUESTIONS,
         'hint_penalty': _ESCAPE_HINT_PENALTY_SEC,
-        'weekly':  _unpack_personal(weekly_personal)[:30],
-        'monthly': _unpack_personal(monthly_personal)[:30],
-        'class_rank': _unpack_class(class_rank),
+        'wrong_penalty': _ESCAPE_WRONG_PENALTY_SEC,
+        'all_classes': CLASS_ORDER,
+        'preview_class': preview_class,
+        'preview_questions': preview_questions,
+        'preview_lessons': preview_lessons,
+        'period': period,
+        'period_label': _ESCAPE_PERIOD_LABELS[period],
+        'period_options': [('weekly', '주간'), ('monthly', '월간'), ('semester', '학기')],
+        'personal':   _escape_unpack_personal(personal_rank)[:30],
+        'class_rank': _escape_unpack_class(class_rank),
+        'this_month': today.strftime('%Y년 %m월'),
+        'grade_award': grade_award,
+        'class_awards': class_awards,
     })

@@ -20,15 +20,20 @@
   <div class="card shadow-sm mb-3">
     <div class="card-body">
       <div class="row text-center">
-        <div class="col-6 border-end">
+        <div class="col-4 border-end">
           <div class="text-muted small">소요시간</div>
-          <div class="fs-5 fw-bold">{{ result.duration }}초</div>
+          <div class="fs-6 fw-bold">{{ result.duration }}초</div>
         </div>
-        <div class="col-6">
-          <div class="text-muted small">힌트 사용</div>
-          <div class="fs-5 fw-bold">{{ result.hints }}회 (+{{ result.penalty }}초)</div>
+        <div class="col-4 border-end">
+          <div class="text-muted small">힌트</div>
+          <div class="fs-6 fw-bold">{{ result.hints }}회</div>
+        </div>
+        <div class="col-4">
+          <div class="text-muted small">오답</div>
+          <div class="fs-6 fw-bold">{{ result.wrong|default:0 }}회</div>
         </div>
       </div>
+      <div class="text-muted small mt-2">총 페널티 +{{ result.penalty }}초</div>
       <hr>
       <div class="text-muted small">최종시간 (순위 기준)</div>
       <div class="fs-2 fw-bold text-danger">{{ result.final }}초</div>
