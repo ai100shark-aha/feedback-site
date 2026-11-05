@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매일방탈출 - 문제 {{ qidx|add:1 }}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-dark">
+<div class="container py-4" style="max-width:480px">
+
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <span class="badge bg-danger">문제 {{ qidx|add:1 }} / {{ total }}</span>
+    <span class="badge bg-secondary">{{ q.topic }}</span>
+  </div>
+
+  {% if wrong %}
+  <div class="alert alert-danger py-2 small">❌ 오답입니다. 다시 생각해보세요!</div>
+  {% endif %}
+
+  <div class="card shadow-sm mb-3" style="border-left:4px solid #dc3545">
+    <div class="card-body">
+      <div class="fs-5 fw-bold mb-3">{{ q.q }}</div>
+
+      <form method="POST">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="answer">
+        {% for choice in q.choices %}
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="radio" name="choice" value="{{ forloop.counter0 }}"
+                 id="c{{ forloop.counter0 }}" required>
+          <label class="form-check-label" for="c{{ forloop.counter0 }}">{{ choice }}</label>
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn btn-danger w-100 mt-2">정답 제출</button>
+      </form>
+    </div>
+  </div>
+
+  {% if hint_seen %}
+  <div class="alert alert-warning py-2 small">💡 힌트: {{ q.hint }}</div>
+  {% else %}
+  <form method="POST">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="hint">
+    <button type="submit" class="btn btn-outline-warning btn-sm w-100">
+      💡 힌트 보기 (탈출시간 +20초 페널티)
+    </button>
+  </form>
+  {% endif %}
+
+</div>
+</body>
+</html>

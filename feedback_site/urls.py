@@ -39,4 +39,8 @@ urlpatterns = [
     path('cloud/', views.cloud_teacher, name='cloud_teacher'),          # 교사 화면
     path('cloud/join/', views.cloud_join, name='cloud_join'),           # 학생 참여
     path('cloud/data/<str:code>/', views.cloud_data, name='cloud_data'),# 실시간 데이터
+    # ── 매일방탈출 ──
+    path('escape/', views.escape_start, name='escape_start'),
+    path('escape/play/', views.escape_play, name='escape_play'),
+    path('escape/teacher/', views.escape_teacher, name='escape_teacher'),
 ]

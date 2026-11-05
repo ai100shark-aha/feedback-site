@@ -2791,3 +2791,281 @@ def teacher_journal_excel(request):
                         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     resp['Content-Disposition'] = f"attachment; filename*=UTF-8''{quote(fname)}"
     return resp
+
+
+# ═══════════════════════════════════════════════════════════════
+#  매일방탈출  (Daily Escape-Room Quiz / Ranking)
+#  - 수업 시작 전, 학생이 전 차시 복습 문제 3개를 풀고 "탈출"
+#  - 순위 기준: 탈출시간(초) + 힌트 1회당 페널티(초) = 최종시간(초), 낮을수록 상위
+#  - 구글 시트에 기록 저장 (Render 재시작에도 데이터 유지 — 워드클라우드와 동일 방식)
+# ═══════════════════════════════════════════════════════════════
+
+_ESCAPE_SHEET_NAME = '방탈출'
+_ESCAPE_HINT_PENALTY_SEC = 20   # 힌트 1회당 추가되는 페널티(초)
+
+# 테스트 범위 문제 세트: 함수와 라이브러리 / 지역·전역변수 (추후 교체 가능)
+_ESCAPE_QUESTIONS = [
+    {
+        'topic': '함수와 라이브러리',
+        'q': "다음 중 '함수'를 사용하는 가장 큰 이유로 가장 알맞은 것은?",
+        'choices': [
+            '프로그램의 실행 속도를 항상 더 빠르게 만들기 위해',
+            '반복되는 코드를 한 번만 작성하고 여러 번 재사용하기 위해',
+            '변수의 자료형을 자동으로 바꾸기 위해',
+            '프로그램을 반드시 여러 파일로 나누기 위해',
+        ],
+        'answer': 1,
+        'hint': '같은 코드를 여러 번 복사-붙여넣기 하지 않으려면 어떻게 해야 할까요?',
+    },
+    {
+        'topic': '함수와 라이브러리',
+        'q': "파이썬에서 이미 만들어져 있는 기능(함수)들을 묶어 놓은 파일을 가져와 쓸 때 사용하는 명령어는?",
+        'choices': ['def', 'return', 'import', 'print'],
+        'answer': 2,
+        'hint': "'라이브러리(모듈)를 가져온다'는 뜻의 영어 단어를 떠올려 보세요.",
+    },
+    {
+        'topic': '지역변수와 전역변수',
+        'q': "함수 안에서만 선언되어, 그 함수 밖에서는 사용할 수 없는 변수를 무엇이라 하나요?",
+        'choices': ['전역변수', '지역변수', '상수', '매개변수'],
+        'answer': 1,
+        'hint': "'지역(地域)'이라는 한자의 뜻처럼, 특정 '구역'에서만 쓸 수 있는 변수입니다.",
+    },
+]
+
+
+def _escape_sheet():
+    """방탈출 전용 탭 반환. 없으면 헤더까지 만들어서 생성."""
+    ss = get_sheet().spreadsheet
+    try:
+        return ss.worksheet(_ESCAPE_SHEET_NAME)
+    except Exception:
+        ws = ss.add_worksheet(title=_ESCAPE_SHEET_NAME, rows=3000, cols=10)
+        ws.append_row(['시각', '날짜', '학번', '번호', '이름', '반',
+                        '소요시간(초)', '힌트횟수', '페널티(초)', '최종시간(초)'])
+        return ws
+
+
+def _escape_log(row):
+    """한 줄 기록 (백그라운드, 학생 응답 지연 없음)."""
+    def job():
+        try:
+            _escape_sheet().append_row(row)
+        except Exception as e:
+            print(f"방탈출 시트 저장 오류: {e}")
+    threading.Thread(target=job, daemon=True).start()
+
+
+def _escape_rows():
+    """시트 전체 값(헤더 제외)을 dict 리스트로 반환. 실패 시 None."""
+    for attempt in range(2):
+        try:
+            rows = _escape_sheet().get_all_values()[1:]
+            out = []
+            for r in rows:
+                if len(r) < 10:
+                    continue
+                try:
+                    out.append({
+                        'date': r[1], 'student_id': r[2], 'student_num': r[3],
+                        'student_name': r[4], 'class_name': r[5],
+                        'duration': float(r[6]), 'hints': int(r[7]),
+                        'penalty': float(r[8]), 'final': float(r[9]),
+                    })
+                except ValueError:
+                    continue
+            return out
+        except Exception as e:
+            if attempt == 0:
+                import time as _t
+                _t.sleep(0.5)
+                continue
+            print(f"방탈출 시트 읽기 오류: {e}")
+            return None
+
+
+def _escape_validate(student_id, student_num, student_name):
+    if not _re.fullmatch(r'\d{5}', student_id or ''):
+        return '학번은 숫자 5자리로 입력해주세요. (예: 10113)'
+    if student_id not in _VALID_IDS:
+        return '학번을 다시 확인해주세요.'
+    if not (student_num or '').isdigit() or int(student_id[3:5]) != int(student_num):
+        return '학번 뒤 2자리와 번호가 일치하지 않습니다.'
+    if len(str(student_name).strip()) < 2:
+        return '이름을 정확히 입력해주세요.'
+    return None
+
+
+def escape_start(request):
+    """학생용: 학번/번호/이름 입력 → 오늘 이미 참여했으면 결과 표시, 아니면 퀴즈 시작"""
+    error = None
+    if request.method == 'POST':
+        student_id   = request.POST.get('student_id', '').strip()
+        student_num  = request.POST.get('student_num', '').strip()
+        student_name = request.POST.get('student_name', '').strip()
+        error = _escape_validate(student_id, student_num, student_name)
+
+        if not error:
+            today = datetime.now().strftime('%Y-%m-%d')
+            rows = _escape_rows()
+            done = next((r for r in (rows or [])
+                         if r['student_id'] == student_id and r['date'] == today), None)
+            if done:
+                return render(request, 'feedback/escape_result.html', {
+                    'already': True, 'result': done,
+                })
+
+            request.session['escape_student'] = {
+                'student_id': student_id, 'student_num': student_num,
+                'student_name': student_name,
+                'class_name': _class_from_student_id(student_id),
+            }
+            request.session['escape_start_at'] = datetime.now().isoformat()
+            request.session['escape_q'] = 0
+            request.session['escape_hints'] = 0
+            request.session['escape_hint_seen'] = []
+            return redirect('escape_play')
+
+    return render(request, 'feedback/escape_start.html', {'error': error})
+
+
+def escape_play(request):
+    """학생용: 문제 1문제씩 출제, 힌트 요청, 정답 체크 → 3문제 완료 시 결과 저장"""
+    student = request.session.get('escape_student')
+    if not student:
+        return redirect('escape_start')
+
+    qidx = request.session.get('escape_q', 0)
+
+    if request.method == 'POST':
+        action = request.POST.get('action')
+        if action == 'hint':
+            seen = request.session.get('escape_hint_seen', [])
+            if qidx not in seen:
+                seen.append(qidx)
+                request.session['escape_hint_seen'] = seen
+                request.session['escape_hints'] = request.session.get('escape_hints', 0) + 1
+            return redirect('escape_play')
+
+        if action == 'answer':
+            try:
+                choice = int(request.POST.get('choice', -1))
+            except ValueError:
+                choice = -1
+            if choice == _ESCAPE_QUESTIONS[qidx]['answer']:
+                qidx += 1
+                request.session['escape_q'] = qidx
+                if qidx >= len(_ESCAPE_QUESTIONS):
+                    return _escape_finish(request)
+                return redirect('escape_play')
+            else:
+                return render(request, 'feedback/escape_play.html', {
+                    'q': _ESCAPE_QUESTIONS[qidx], 'qidx': qidx,
+                    'total': len(_ESCAPE_QUESTIONS),
+                    'hint_seen': qidx in request.session.get('escape_hint_seen', []),
+                    'wrong': True,
+                })
+
+    if qidx >= len(_ESCAPE_QUESTIONS):
+        return _escape_finish(request)
+
+    return render(request, 'feedback/escape_play.html', {
+        'q': _ESCAPE_QUESTIONS[qidx], 'qidx': qidx,
+        'total': len(_ESCAPE_QUESTIONS),
+        'hint_seen': qidx in request.session.get('escape_hint_seen', []),
+        'wrong': False,
+    })
+
+
+def _escape_finish(request):
+    """3문제 완료 처리: 소요시간·페널티 계산, 시트 저장, 결과 화면"""
+    student = request.session.get('escape_student')
+    start_at = request.session.get('escape_start_at')
+    hints = request.session.get('escape_hints', 0)
+    try:
+        start_dt = datetime.fromisoformat(start_at)
+    except Exception:
+        start_dt = datetime.now()
+    duration = max(0, (datetime.now() - start_dt).total_seconds())
+    penalty = hints * _ESCAPE_HINT_PENALTY_SEC
+    final = duration + penalty
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    result = {
+        'date': today, 'student_id': student['student_id'],
+        'student_num': student['student_num'], 'student_name': student['student_name'],
+        'class_name': student['class_name'],
+        'duration': round(duration, 1), 'hints': hints,
+        'penalty': penalty, 'final': round(duration + penalty, 1),
+    }
+    _escape_log([
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'), today,
+        student['student_id'], student['student_num'], student['student_name'],
+        student['class_name'], result['duration'], hints, penalty, result['final'],
+    ])
+
+    for k in ('escape_student', 'escape_start_at', 'escape_q', 'escape_hints', 'escape_hint_seen'):
+        request.session.pop(k, None)
+
+    return render(request, 'feedback/escape_result.html', {
+        'already': False, 'result': result,
+    })
+
+
+def _escape_rank(rows, key_fn, final_key='final'):
+    """rows를 key_fn 기준으로 묶어 평균 final시간 오름차순 순위 리스트 반환."""
+    groups = defaultdict(list)
+    for r in rows:
+        groups[key_fn(r)].append(r)
+    out = []
+    for key, items in groups.items():
+        avg_final = sum(i[final_key] for i in items) / len(items)
+        out.append({'key': key, 'avg_final': round(avg_final, 1), 'count': len(items), 'items': items})
+    out.sort(key=lambda x: x['avg_final'])
+    return out
+
+
+def escape_teacher(request):
+    """교사용: 매일방탈출 주간/월간/반별 순위"""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+
+    rows = _escape_rows() or []
+    today = datetime.now().date()
+    week_start = today - timedelta(days=today.weekday())   # 이번주 월요일
+    month_prefix = today.strftime('%Y-%m')
+
+    def _d(r):
+        try:
+            return datetime.strptime(r['date'], '%Y-%m-%d').date()
+        except Exception:
+            return None
+
+    weekly_rows  = [r for r in rows if (_d(r) and _d(r) >= week_start)]
+    monthly_rows = [r for r in rows if r['date'].startswith(month_prefix)]
+
+    weekly_personal  = _escape_rank(weekly_rows,  lambda r: (r['student_id'], r['student_name'], r['class_name']))
+    monthly_personal = _escape_rank(monthly_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
+    class_rank       = _escape_rank(weekly_rows,  lambda r: r['class_name'])
+
+    def _unpack_personal(ranked):
+        out = []
+        for i, g in enumerate(ranked, start=1):
+            sid, sname, cname = g['key']
+            out.append({'rank': i, 'student_id': sid, 'student_name': sname,
+                        'class_name': cname, 'avg_final': g['avg_final'], 'count': g['count']})
+        return out
+
+    def _unpack_class(ranked):
+        out = []
+        for i, g in enumerate(ranked, start=1):
+            out.append({'rank': i, 'class_name': g['key'], 'avg_final': g['avg_final'], 'count': g['count']})
+        return out
+
+    return render(request, 'feedback/escape_teacher.html', {
+        'questions': _ESCAPE_QUESTIONS,
+        'hint_penalty': _ESCAPE_HINT_PENALTY_SEC,
+        'weekly':  _unpack_personal(weekly_personal)[:30],
+        'monthly': _unpack_personal(monthly_personal)[:30],
+        'class_rank': _unpack_class(class_rank),
+    })

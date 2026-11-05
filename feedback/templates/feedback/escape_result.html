@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>매일방탈출 - 결과</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-4 text-center" style="max-width:420px">
+
+  {% if already %}
+  <h1 class="h5 fw-bold mb-3">✅ 오늘은 이미 탈출했어요!</h1>
+  <p class="text-muted small">같은 날에는 한 번만 참여할 수 있어요.</p>
+  {% else %}
+  <h1 class="h4 fw-bold mb-1">🎉 탈출 성공!</h1>
+  <p class="text-muted small mb-3">{{ result.student_name }}님, 수고했어요!</p>
+  {% endif %}
+
+  <div class="card shadow-sm mb-3">
+    <div class="card-body">
+      <div class="row text-center">
+        <div class="col-6 border-end">
+          <div class="text-muted small">소요시간</div>
+          <div class="fs-5 fw-bold">{{ result.duration }}초</div>
+        </div>
+        <div class="col-6">
+          <div class="text-muted small">힌트 사용</div>
+          <div class="fs-5 fw-bold">{{ result.hints }}회 (+{{ result.penalty }}초)</div>
+        </div>
+      </div>
+      <hr>
+      <div class="text-muted small">최종시간 (순위 기준)</div>
+      <div class="fs-2 fw-bold text-danger">{{ result.final }}초</div>
+    </div>
+  </div>
+
+  <a href="/" class="btn btn-outline-secondary btn-sm">← 메인으로</a>
+
+</div>
+</body>
+</html>
