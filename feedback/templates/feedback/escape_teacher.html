@@ -18,13 +18,44 @@
 
   <div class="card shadow-sm mb-4">
     <div class="card-body py-2">
-      <div class="small text-muted mb-1">현재 출제 문제 (테스트 범위 — 함수와 라이브러리 / 지역·전역변수)</div>
-      <ol class="small mb-0">
-        {% for q in questions %}
-        <li>[{{ q.topic }}] {{ q.q }}</li>
-        {% endfor %}
-      </ol>
-      <div class="small text-muted mt-1">힌트 1회당 페널티: +{{ hint_penalty }}초</div>
+      <div class="small text-muted mb-2">
+        문제는 반마다 자동 생성됩니다 (최근 2~3차시 지도서 원문 + 그 반 학생 피드백 기반).
+        같은 날 같은 반은 모두 같은 3문제를 풉니다. 힌트 1회당 페널티: +{{ hint_penalty }}초
+      </div>
+      <form method="GET" class="d-flex gap-2 align-items-center flex-wrap">
+        <select name="preview_class" class="form-select form-select-sm" style="max-width:140px">
+          <option value="">반 선택…</option>
+          {% for c in all_classes %}
+          <option value="{{ c }}" {% if c == preview_class %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-outline-danger btn-sm">오늘 문제 미리보기</button>
+      </form>
+
+      {% if preview_class %}
+      <div class="mt-3">
+        {% if not preview_lessons %}
+        <div class="small text-muted">{{ preview_class }}은(는) 아직 진행된 차시가 없어 미리볼 수 없습니다.</div>
+        {% elif preview_questions %}
+        <div class="small text-muted mb-1">
+          근거 차시: {% for l in preview_lessons %}{{ l.title }}{% if not forloop.last %}, {% endif %}{% endfor %}
+        </div>
+        <ol class="small mb-0">
+          {% for q in preview_questions %}
+          <li class="mb-1">
+            <b>[{{ q.topic }}]</b> {{ q.q }}
+            <ul class="mb-1">
+              {% for c in q.choices %}
+              <li{% if forloop.counter0 == q.answer %} class="text-success fw-bold"{% endif %}>{{ c }}</li>
+              {% endfor %}
+            </ul>
+            <span class="text-muted">힌트: {{ q.hint }}</span>
+          </li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+      </div>
+      {% endif %}
     </div>
   </div>
 
