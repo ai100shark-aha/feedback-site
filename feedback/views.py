@@ -2802,6 +2802,7 @@ def teacher_journal_excel(request):
 
 _ESCAPE_SHEET_NAME = '방탈출'
 _ESCAPE_HINT_PENALTY_SEC = 20   # 힌트 1회당 추가되는 페널티(초)
+_ESCAPE_WRONG_PENALTY_SEC = 15  # 오답 1회당 추가되는 페널티(초)
 
 # AI 출제에 쓸 "최근 피드백" 신호가 충분한지 판단하는 기준
 _ESCAPE_FEEDBACK_MIN_STUDENTS = 5     # 최근 2~3차시 합쳐서 이 인원 미만이면 피드백 신호 사용 안 함
@@ -3098,6 +3099,7 @@ def escape_start(request):
             request.session['escape_q'] = 0
             request.session['escape_hints'] = 0
             request.session['escape_hint_seen'] = []
+            request.session['escape_wrong'] = 0
             return redirect('escape_play')
 
     return render(request, 'feedback/escape_start.html', {'error': error})
@@ -3134,6 +3136,7 @@ def escape_play(request):
                     return _escape_finish(request)
                 return redirect('escape_play')
             else:
+                request.session['escape_wrong'] = request.session.get('escape_wrong', 0) + 1
                 return render(request, 'feedback/escape_play.html', {
                     'q': questions[qidx], 'qidx': qidx,
                     'total': len(questions),
@@ -3157,12 +3160,13 @@ def _escape_finish(request):
     student = request.session.get('escape_student')
     start_at = request.session.get('escape_start_at')
     hints = request.session.get('escape_hints', 0)
+    wrong = request.session.get('escape_wrong', 0)
     try:
         start_dt = datetime.fromisoformat(start_at)
     except Exception:
         start_dt = datetime.now()
     duration = max(0, (datetime.now() - start_dt).total_seconds())
-    penalty = hints * _ESCAPE_HINT_PENALTY_SEC
+    penalty = hints * _ESCAPE_HINT_PENALTY_SEC + wrong * _ESCAPE_WRONG_PENALTY_SEC
     final = duration + penalty
     today = datetime.now().strftime('%Y-%m-%d')
 
@@ -3170,8 +3174,8 @@ def _escape_finish(request):
         'date': today, 'student_id': student['student_id'],
         'student_num': student['student_num'], 'student_name': student['student_name'],
         'class_name': student['class_name'],
-        'duration': round(duration, 1), 'hints': hints,
-        'penalty': penalty, 'final': round(duration + penalty, 1),
+        'duration': round(duration, 1), 'hints': hints, 'wrong': wrong,
+        'penalty': penalty, 'final': round(final, 1),
     }
     _escape_log([
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'), today,
@@ -3180,7 +3184,7 @@ def _escape_finish(request):
     ])
 
     for k in ('escape_student', 'escape_questions', 'escape_start_at',
-              'escape_q', 'escape_hints', 'escape_hint_seen'):
+              'escape_q', 'escape_hints', 'escape_hint_seen', 'escape_wrong'):
         request.session.pop(k, None)
 
     return render(request, 'feedback/escape_result.html', {
@@ -3285,6 +3289,7 @@ def escape_teacher(request):
 
     return render(request, 'feedback/escape_teacher.html', {
         'hint_penalty': _ESCAPE_HINT_PENALTY_SEC,
+        'wrong_penalty': _ESCAPE_WRONG_PENALTY_SEC,
         'all_classes': CLASS_ORDER,
         'preview_class': preview_class,
         'preview_questions': preview_questions,

@@ -20,7 +20,7 @@
     <div class="card-body py-2">
       <div class="small text-muted mb-2">
         문제는 반마다 자동 생성됩니다 (최근 2~3차시 지도서 원문 + 그 반 학생 피드백 기반).
-        같은 날 같은 반은 모두 같은 3문제를 풉니다. 힌트 1회당 페널티: +{{ hint_penalty }}초
+        같은 날 같은 반은 모두 같은 3문제를 풉니다. 힌트 1회당 +{{ hint_penalty }}초, 오답 1회당 +{{ wrong_penalty }}초 페널티
       </div>
       <form method="GET" class="d-flex gap-2 align-items-center flex-wrap">
         <select name="preview_class" class="form-select form-select-sm" style="max-width:140px">
