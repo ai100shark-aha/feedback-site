@@ -805,6 +805,20 @@ def guide_upload(request):
 
 # ── View: 교사 – 범위 설정 → 문제 생성 ──────────────────────────────
 
+def quiz_toggle_active(request, quizset_id):
+    """교사용: 특정 차시 QuizSet의 활성/비활성 전환.
+    방탈출용으로만 등록(실제 활동문제 0개)한 차시를 학생 '문제풀기' 화면에서
+    숨기고 싶을 때 사용. 방탈출 쪽 로직은 is_active와 무관하게 동작하므로 영향 없음."""
+    if request.method == 'POST':
+        pw = request.POST.get('password', '')
+        if pw == TEACHER_PASSWORD:
+            qs = QuizSet.objects.filter(id=quizset_id).first()
+            if qs:
+                qs.is_active = not qs.is_active
+                qs.save(update_fields=['is_active'])
+    return redirect('quiz_generate')
+
+
 def quiz_generate(request):
     """교사용: 저장된 지도서에서 교과서 범위를 지정해 문제 생성"""
     error = success = None

@@ -15,6 +15,7 @@ urlpatterns = [
     # ── 활동문제 채점 시스템 ──
     path('guide/upload/', views.guide_upload, name='guide_upload'),       # 지도서 1회 업로드
     path('quiz/generate/', views.quiz_generate, name='quiz_generate'),    # 범위 설정 → 문제 생성
+    path('quiz/toggle/<int:quizset_id>/', views.quiz_toggle_active, name='quiz_toggle_active'),  # 활성/비활성 전환
     path('quiz/<int:lesson_id>/', views.quiz_solve, name='quiz_solve'),
     path('quiz/<int:lesson_id>/submit/', views.quiz_submit, name='quiz_submit'),
     path('quiz/<int:lesson_id>/result/', views.quiz_result, name='quiz_result'),
