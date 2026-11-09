@@ -886,6 +886,7 @@ def quiz_generate(request):
                                 'is_active':   True,
                             }
                         )
+                        _guide_mirror_save(chapter_num, qs.title, topic, qs.range_text)
                         qs.questions.all().delete()
                         for q in result.get('questions', []):
                             Question.objects.create(
@@ -2804,6 +2805,14 @@ _ESCAPE_SHEET_NAME = '방탈출'
 _ESCAPE_HINT_PENALTY_SEC = 20   # 힌트 1회당 추가되는 페널티(초)
 _ESCAPE_WRONG_PENALTY_SEC = 15  # 오답 1회당 추가되는 페널티(초)
 
+# 방탈출 문제 생성에 쓰는 AI 모델. 단순 추출형 작업(지도서 원문 → 4지선다)이라
+# 저렴한 모델로도 충분하고, 반/과목이 늘어나도 비용 부담이 거의 없도록 가장 저렴한 모델을 사용.
+_ESCAPE_AI_MODEL = 'claude-haiku-5-5'
+
+# 지도서 범위 텍스트(QuizSet.range_text)는 일반 SQLite DB에 있어서 Render 무료 티어
+# 재시작/재배포마다 사라질 수 있음. 구글시트에 미러링해 두고, DB가 비어 있으면 여기서 읽는다.
+_GUIDE_SHEET_NAME = '지도서원문'
+
 # AI 출제에 쓸 "최근 피드백" 신호가 충분한지 판단하는 기준
 _ESCAPE_FEEDBACK_MIN_STUDENTS = 5     # 최근 2~3차시 합쳐서 이 인원 미만이면 피드백 신호 사용 안 함
 _ESCAPE_FEEDBACK_MIN_CHARS    = 80    # 어려움·심화질문 텍스트를 합쳐 이 길이 미만이면 사용 안 함
@@ -2883,17 +2892,87 @@ def _escape_feedback_signal(class_name, lessons):
     return '\n'.join(texts), len(seen_students)
 
 
+def _guide_sheet():
+    """지도서 원문 미러링 탭 반환. 없으면 헤더까지 만들어서 생성."""
+    ss = get_sheet().spreadsheet
+    try:
+        return ss.worksheet(_GUIDE_SHEET_NAME)
+    except Exception:
+        ws = ss.add_worksheet(title=_GUIDE_SHEET_NAME, rows=200, cols=4)
+        ws.append_row(['차시', '제목', '주제', '원문'])
+        return ws
+
+
+def _guide_mirror_save(chapter_num, title, topic, range_text):
+    """QuizSet 저장/수정 시 지도서 원문을 시트에도 복사(업서트). 실패해도 본 기능엔 영향 없음."""
+    def job():
+        try:
+            ws = _guide_sheet()
+            values = ws.get_all_values()
+            row_idx = None
+            for i, r in enumerate(values[1:], start=2):
+                if r and r[0] == str(chapter_num):
+                    row_idx = i
+                    break
+            row = [str(chapter_num), title, topic, (range_text or '')[:5000]]
+            if row_idx:
+                ws.update(f'A{row_idx}:D{row_idx}', [row])
+            else:
+                ws.append_row(row)
+        except Exception as e:
+            print(f"지도서 원문 시트 미러링 오류: {e}")
+    threading.Thread(target=job, daemon=True).start()
+
+
+_GUIDE_MIRROR_CACHE = {'data': None, 'at': 0}
+
+
+def _guide_mirror_load_all():
+    """시트에 미러링된 지도서 원문 전체를 {차시번호: {'title':.., 'range_text':..}}로 반환.
+    5분 캐시 (재시작마다 QuizSet DB가 비어도 매 요청마다 시트를 읽지 않도록)."""
+    import time
+    if _GUIDE_MIRROR_CACHE['data'] is not None and time.time() - _GUIDE_MIRROR_CACHE['at'] < 300:
+        return _GUIDE_MIRROR_CACHE['data']
+    out = {}
+    try:
+        rows = _guide_sheet().get_all_values()[1:]
+        for r in rows:
+            if len(r) < 4:
+                continue
+            try:
+                out[int(r[0])] = {'title': r[1], 'range_text': r[3]}
+            except ValueError:
+                continue
+    except Exception as e:
+        print(f"지도서 원문 시트 읽기 오류: {e}")
+    _GUIDE_MIRROR_CACHE['data'], _GUIDE_MIRROR_CACHE['at'] = out, time.time()
+    return out
+
+
 def _escape_textbook_context(lessons, max_chars=6000):
-    """최근 차시들의 지도서 원문(QuizSet.range_text)을 모아 반환."""
+    """최근 차시들의 지도서 원문을 모아 반환.
+    DB(QuizSet)에 있으면 그걸 쓰고, Render 재시작으로 DB가 비어 있으면
+    구글시트 미러(_guide_mirror_load_all)에서 가져온다."""
     if not lessons:
         return ''
     chapter_nums = sorted({l['id'] % 100 for l in lessons})
-    qsets = QuizSet.objects.filter(chapter_num__in=chapter_nums).order_by('chapter_num')
+    qsets = {qs.chapter_num: qs for qs in QuizSet.objects.filter(chapter_num__in=chapter_nums)}
+
+    mirror = None
     parts = []
-    for qs in qsets:
-        body = (qs.range_text or '').strip()
+    for num in chapter_nums:
+        qs = qsets.get(num)
+        title, body = '', ''
+        if qs and (qs.range_text or '').strip():
+            title, body = qs.title, qs.range_text.strip()
+        else:
+            if mirror is None:
+                mirror = _guide_mirror_load_all()
+            m = mirror.get(num)
+            if m and (m.get('range_text') or '').strip():
+                title, body = m.get('title', f'{num}차시'), m['range_text'].strip()
         if body:
-            parts.append(f"[{qs.title}]\n{body}")
+            parts.append(f"[{title}]\n{body}")
     return '\n\n'.join(parts)[:max_chars]
 
 
@@ -2979,7 +3058,7 @@ def _escape_generate_questions(class_name):
 ]"""
 
         msg = client.messages.create(
-            model='claude-sonnet-4-20250514',
+            model=_ESCAPE_AI_MODEL,
             max_tokens=2048,
             messages=[{'role': 'user', 'content': prompt}],
         )
