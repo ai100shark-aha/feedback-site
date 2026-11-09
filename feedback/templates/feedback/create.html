@@ -49,6 +49,16 @@
     </div>
 
     <div class="card shadow-sm mb-3">
+      <div class="card-header bg-white fw-bold">오늘 배운 교과서 페이지 *</div>
+      <div class="card-body">
+        <label class="form-label text-muted small">오늘 수업에서 다룬 교과서 쪽수를 적어주세요. (범위로 적어도 OK)</label>
+        <input type="text" name="pages" class="form-control"
+               placeholder="예: 45-52 또는 48쪽" required minlength="1" value="{{ prev.pages }}">
+        <div class="form-text">정확하지 않아도 괜찮아요. 기억나는 대로 적어주세요.</div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm mb-3">
       <div class="card-header bg-white fw-bold">배운 내용 요약 *</div>
       <div class="card-body">
         <label class="form-label text-muted small">오늘 배운 핵심 개념 3가지를 본인만의 언어로 정의한다면?</label>
