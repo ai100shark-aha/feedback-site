@@ -372,7 +372,8 @@ def feedback_create(request, lesson_id):
         career       = request.POST['career'].strip()
         deeplearn    = request.POST['deeplearn'].strip()
         peer         = request.POST['peer'].strip()
-        
+        pages        = request.POST.get('pages', '').strip()
+
         # 학생정보 검증
         v_error = validate_student(lesson, student_id, student_num, student_name)
         if v_error:
@@ -385,7 +386,7 @@ def feedback_create(request, lesson_id):
 
         # 빈 칸 서버측 검증
         if not all([student_id, student_num, student_name,
-                    summary, problem, career, deeplearn, peer]):
+                    summary, problem, career, deeplearn, peer, pages]):
             return render(request, 'feedback/create.html', {
                 'lesson': lesson,
                 'error': '모든 항목을 입력해주세요!',
@@ -451,6 +452,7 @@ def feedback_create(request, lesson_id):
                         career,        # H[7]: 진로연결
                         deeplearn,     # I[8]: 심화학습
                         peer,          # J[9]: 칭찬
+                        pages,         # K[10]: 오늘 배운 교과서 페이지
                     ])
                 except Exception as e:
                     print(f"구글 시트 저장 오류: {e}")
@@ -492,6 +494,7 @@ def feedback_edit(request, lesson_id, student_id):
                     'career':       row[7] if len(row) > 7 else '',
                     'deeplearn':    row[8] if len(row) > 8 else '',
                     'peer':         row[9] if len(row) > 9 else '',
+                    'pages':        row[10] if len(row) > 10 else '',
                 }
                 row_index = i
                 break
@@ -507,8 +510,9 @@ def feedback_edit(request, lesson_id, student_id):
         career    = request.POST['career'].strip()
         deeplearn = request.POST['deeplearn'].strip()
         peer      = request.POST['peer'].strip()
+        pages     = request.POST.get('pages', '').strip()
 
-        if any(len(x) < 2 for x in [summary, problem, career, deeplearn, peer]):
+        if any(len(x) < 2 for x in [summary, problem, career, deeplearn, peer]) or not pages:
             return render(request, 'feedback/create.html', {
                 'lesson': lesson,
                 'error': '각 항목을 좀 더 자세히 입력해주세요!',
@@ -520,9 +524,9 @@ def feedback_edit(request, lesson_id, student_id):
         def update_sheet():
             try:
                 sheet = get_sheet()
-                # 실제 시트: 핵심개념=F[5], 문제해결=G[6], ..., 칭찬=J[9]
-                sheet.update(f'F{row_index}:J{row_index}', [[
-                    summary, problem, career, deeplearn, peer
+                # 실제 시트: 핵심개념=F[5], 문제해결=G[6], ..., 칭찬=J[9], 페이지=K[10]
+                sheet.update(f'F{row_index}:K{row_index}', [[
+                    summary, problem, career, deeplearn, peer, pages
                 ]])
                 # A열 수정시간 업데이트
                 sheet.update(f'A{row_index}', [[
@@ -570,6 +574,7 @@ def lesson_result(request, lesson_id):
                         'career':       row[7] if len(row) > 7 else '',
                         'deeplearn':    row[8] if len(row) > 8 else '',
                         'peer':         row[9] if len(row) > 9 else '',
+                        'pages':        row[10] if len(row) > 10 else '',
                     }
                     break
             if not record:
@@ -886,7 +891,7 @@ def quiz_generate(request):
                                 'is_active':   True,
                             }
                         )
-                        _guide_mirror_save(chapter_num, qs.title, topic, qs.range_text)
+                        _guide_mirror_save(chapter_num, qs.title, topic, qs.range_pages, qs.range_text)
                         qs.questions.all().delete()
                         for q in result.get('questions', []):
                             Question.objects.create(
@@ -2898,12 +2903,12 @@ def _guide_sheet():
     try:
         return ss.worksheet(_GUIDE_SHEET_NAME)
     except Exception:
-        ws = ss.add_worksheet(title=_GUIDE_SHEET_NAME, rows=200, cols=4)
-        ws.append_row(['차시', '제목', '주제', '원문'])
+        ws = ss.add_worksheet(title=_GUIDE_SHEET_NAME, rows=200, cols=5)
+        ws.append_row(['차시', '제목', '주제', '페이지', '원문'])
         return ws
 
 
-def _guide_mirror_save(chapter_num, title, topic, range_text):
+def _guide_mirror_save(chapter_num, title, topic, range_pages, range_text):
     """QuizSet 저장/수정 시 지도서 원문을 시트에도 복사(업서트). 실패해도 본 기능엔 영향 없음."""
     def job():
         try:
@@ -2914,9 +2919,9 @@ def _guide_mirror_save(chapter_num, title, topic, range_text):
                 if r and r[0] == str(chapter_num):
                     row_idx = i
                     break
-            row = [str(chapter_num), title, topic, (range_text or '')[:5000]]
+            row = [str(chapter_num), title, topic, (range_pages or ''), (range_text or '')[:5000]]
             if row_idx:
-                ws.update(f'A{row_idx}:D{row_idx}', [row])
+                ws.update(f'A{row_idx}:E{row_idx}', [row])
             else:
                 ws.append_row(row)
         except Exception as e:
@@ -2928,7 +2933,8 @@ _GUIDE_MIRROR_CACHE = {'data': None, 'at': 0}
 
 
 def _guide_mirror_load_all():
-    """시트에 미러링된 지도서 원문 전체를 {차시번호: {'title':.., 'range_text':..}}로 반환.
+    """시트에 미러링된 지도서 원문 전체를
+    {차시번호: {'title':.., 'range_pages':.., 'range_text':..}}로 반환.
     5분 캐시 (재시작마다 QuizSet DB가 비어도 매 요청마다 시트를 읽지 않도록)."""
     import time
     if _GUIDE_MIRROR_CACHE['data'] is not None and time.time() - _GUIDE_MIRROR_CACHE['at'] < 300:
@@ -2937,10 +2943,10 @@ def _guide_mirror_load_all():
     try:
         rows = _guide_sheet().get_all_values()[1:]
         for r in rows:
-            if len(r) < 4:
+            if len(r) < 5:
                 continue
             try:
-                out[int(r[0])] = {'title': r[1], 'range_text': r[3]}
+                out[int(r[0])] = {'title': r[1], 'range_pages': r[3], 'range_text': r[4]}
             except ValueError:
                 continue
     except Exception as e:
@@ -2949,25 +2955,98 @@ def _guide_mirror_load_all():
     return out
 
 
+def _parse_page_range(text):
+    """'45-52', '45~52', 'p.45', '45,46' 등 자유 서식에서 (시작, 끝) 페이지를 추출.
+    숫자를 못 찾으면 None."""
+    if not text:
+        return None
+    nums = [int(x) for x in re.findall(r'\d+', str(text))]
+    if not nums:
+        return None
+    return (min(nums), max(nums))
+
+
+def _escape_lesson_page_range(lesson_title):
+    """그 차시(lesson_title)에 대해 학생들이 적어낸 '오늘 배운 교과서 페이지'를 모아
+    가장 많이 나온 페이지 범위를 대표값으로 반환. 데이터 없으면 None.
+    (실제 피드백 시트 K열[10] = pages)
+    """
+    try:
+        rows = get_sheet().get_all_values()[1:]
+    except Exception as e:
+        print(f"페이지 신호 읽기 오류: {e}")
+        return None
+
+    ranges = []
+    for r in rows:
+        if len(r) < 11 or r[1] != lesson_title:
+            continue
+        pr = _parse_page_range(r[10])
+        if pr:
+            ranges.append(pr)
+    if not ranges:
+        return None
+
+    from collections import Counter
+    common_start, _ = Counter(r[0] for r in ranges).most_common(1)[0]
+    matching = [r for r in ranges if r[0] == common_start]
+    return (common_start, max(r[1] for r in matching))
+
+
+def _escape_match_chapter_by_pages(page_range, qsets_by_num, mirror):
+    """(시작,끝) 페이지 범위와 가장 많이 겹치는 지도서 차시 번호 반환. 못 찾으면 None."""
+    if not page_range:
+        return None
+    start, end = page_range
+    best, best_overlap = None, 0
+    for num, qs in qsets_by_num.items():
+        pr = _parse_page_range(qs.range_pages)
+        if not pr:
+            continue
+        overlap = min(end, pr[1]) - max(start, pr[0])
+        if overlap > best_overlap:
+            best_overlap, best = overlap, num
+    if best is not None:
+        return best
+    for num, info in mirror.items():
+        pr = _parse_page_range(info.get('range_pages', ''))
+        if not pr:
+            continue
+        overlap = min(end, pr[1]) - max(start, pr[0])
+        if overlap > best_overlap:
+            best_overlap, best = overlap, num
+    return best
+
+
 def _escape_textbook_context(lessons, max_chars=6000):
     """최근 차시들의 지도서 원문을 모아 반환.
+
+    차시 매칭 우선순위:
+    1) 그 수업에 학생들이 적어낸 '오늘 배운 교과서 페이지'로 실제 어떤 차시를 배웠는지 추정
+       (학교 행사 등으로 차시를 건너뛰어도 정확하게 매칭됨)
+    2) 페이지 신호가 없으면 "그 반의 n번째 수업 = 지도서 n차시"라는 기존 추정으로 폴백
     DB(QuizSet)에 있으면 그걸 쓰고, Render 재시작으로 DB가 비어 있으면
-    구글시트 미러(_guide_mirror_load_all)에서 가져온다."""
+    구글시트 미러(_guide_mirror_load_all)에서 가져온다.
+    """
     if not lessons:
         return ''
-    chapter_nums = sorted({l['id'] % 100 for l in lessons})
-    qsets = {qs.chapter_num: qs for qs in QuizSet.objects.filter(chapter_num__in=chapter_nums)}
+    all_qsets = {qs.chapter_num: qs for qs in QuizSet.objects.exclude(range_text='')}
+    mirror = _guide_mirror_load_all()
 
-    mirror = None
+    chapter_nums = []
+    for l in lessons:
+        page_range = _escape_lesson_page_range(l['title'])
+        matched = _escape_match_chapter_by_pages(page_range, all_qsets, mirror)
+        chapter_nums.append(matched if matched is not None else l['id'] % 100)
+    chapter_nums = sorted(set(chapter_nums))
+
     parts = []
     for num in chapter_nums:
-        qs = qsets.get(num)
+        qs = all_qsets.get(num)
         title, body = '', ''
         if qs and (qs.range_text or '').strip():
             title, body = qs.title, qs.range_text.strip()
         else:
-            if mirror is None:
-                mirror = _guide_mirror_load_all()
             m = mirror.get(num)
             if m and (m.get('range_text') or '').strip():
                 title, body = m.get('title', f'{num}차시'), m['range_text'].strip()
