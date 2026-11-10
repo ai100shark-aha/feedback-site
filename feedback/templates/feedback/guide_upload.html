@@ -15,20 +15,72 @@
   </div>
 
   <h4 class="fw-bold mb-1">📚 교사용 지도서 등록</h4>
-  <p class="text-muted small mb-1">지도서 내용을 텍스트로 붙여넣으면 저장됩니다. 이후 문제 생성에서 범위를 지정해 사용하세요.</p>
-  <div class="alert alert-info py-2 small mb-3">
-    💡 <strong>PDF에서 텍스트 복사하는 법:</strong> PDF를 크롬/엣지로 열기 → Ctrl+A → Ctrl+C → 아래 입력란에 붙여넣기 (Ctrl+V)
-  </div>
 
   {% if error %}
   <div class="alert alert-danger">{{ error }}</div>
   {% endif %}
   {% if success %}
-  <div class="alert alert-success">{{ success }} &nbsp; <a href="/quiz/generate/" class="alert-link">문제 생성하기 →</a></div>
+  <div class="alert alert-success">{{ success }}</div>
   {% endif %}
 
+  <!-- ══ 학기 전체 지도서 PDF (방탈출 전용) ══ -->
+  <div class="card shadow-sm mb-3 border-danger">
+    <div class="card-body">
+      <h6 class="fw-bold mb-1">🔓 학기 전체 지도서 PDF — 매일방탈출 전용</h6>
+      <p class="text-muted small mb-2">
+        학기 초 1번만 PDF 통째로 올리면 끝입니다. 페이지별로 AI가 개념 설명만 깔끔하게
+        정리해서 저장하고(이미지 설명·지도법·평가기준 등은 자동 제외), 이후 학생이 일지에
+        적는 "오늘 배운 페이지"로 자동 매칭됩니다 — 차시마다 따로 등록할 필요 없습니다.
+      </p>
+
+      {% if pdf_progress.running %}
+      <div class="alert alert-warning py-2 small mb-2">
+        ⏳ [{{ pdf_progress.name }}] 처리 중... {{ pdf_progress.done }}/{{ pdf_progress.total }} 페이지
+        (새로고침해서 진행 상황을 확인하세요. 수십 페이지 기준 몇 분 정도 걸릴 수 있습니다.)
+      </div>
+      {% elif pdf_progress.error %}
+      <div class="alert alert-danger py-2 small mb-2">⚠️ 마지막 처리 중 오류: {{ pdf_progress.error }}</div>
+      {% endif %}
+
+      <div class="small text-muted mb-2">현재 저장된 페이지 수: <b>{{ pdf_pages_count }}</b>개</div>
+
+      <form method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="hidden" name="form_type" value="pdf">
+        <div class="mb-2">
+          <input type="password" name="password" class="form-control form-control-sm" required placeholder="교사 비밀번호">
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-md-5">
+            <input type="text" name="pdf_name" class="form-control form-control-sm"
+                   placeholder="이름 (예: 정보 지도서 2026-2학기)" value="정보 교과 지도서 2026-2학기">
+          </div>
+          <div class="col-md-4">
+            <input type="file" name="guide_pdf" accept="application/pdf" class="form-control form-control-sm" required>
+          </div>
+          <div class="col-md-3">
+            <input type="number" name="page_offset" class="form-control form-control-sm" value="0" placeholder="페이지 보정값">
+          </div>
+        </div>
+        <div class="form-text mb-2">
+          "페이지 보정값": PDF 파일상 1페이지가 교과서 실제 몇 페이지인지 다를 때 씁니다.
+          예: PDF 1페이지가 실제로는 교과서 3페이지라면 2를 입력 (교과서페이지 = PDF페이지 + 보정값). 모르면 0.
+        </div>
+        <button type="submit" class="btn btn-danger btn-sm w-100" {% if pdf_progress.running %}disabled{% endif %}>
+          📤 PDF 업로드 (백그라운드 처리)
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ══ 텍스트 붙여넣기 (활동문제 채점용) ══ -->
   <div class="card shadow-sm mb-4">
     <div class="card-body">
+      <h6 class="fw-bold mb-1">📝 지도서 텍스트 — 활동문제 채점용</h6>
+      <p class="text-muted small mb-1">단원별로 텍스트를 붙여넣으면 저장됩니다. <a href="/quiz/generate/">활동문제 생성</a>에서 범위를 지정해 사용하세요.</p>
+      <div class="alert alert-info py-2 small mb-2">
+        💡 <strong>PDF에서 텍스트 복사하는 법:</strong> PDF를 크롬/엣지로 열기 → Ctrl+A → Ctrl+C → 아래 입력란에 붙여넣기 (Ctrl+V)
+      </div>
       <form method="POST">
         {% csrf_token %}
 
