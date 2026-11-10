@@ -64,7 +64,9 @@
         </div>
         <div class="form-text mb-2">
           "페이지 보정값": PDF 파일상 1페이지가 교과서 실제 몇 페이지인지 다를 때 씁니다.
-          예: PDF 1페이지가 실제로는 교과서 3페이지라면 2를 입력 (교과서페이지 = PDF페이지 + 보정값). 모르면 0.
+          예: PDF 1페이지가 실제로는 교과서 3페이지라면 2를 입력 (교과서페이지 = PDF페이지 + 보정값). 모르면 0.<br>
+          스캔(이미지) PDF도 됩니다. 파일이 40MB를 넘으면 단원별로 나눠서 여러 번 올리세요 —
+          파일마다 보정값을 맞게 넣으면 이어서 쌓입니다. 3페이지에 30초~1분 정도 걸립니다.
         </div>
         <button type="submit" class="btn btn-danger btn-sm w-100" {% if pdf_progress.running %}disabled{% endif %}>
           📤 PDF 업로드 (백그라운드 처리)
