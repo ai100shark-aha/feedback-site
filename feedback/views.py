@@ -790,6 +790,10 @@ def guide_upload(request):
                 error = '이미 지도서 PDF를 처리 중입니다. 완료 후 다시 시도해주세요.'
             elif not pdf_file:
                 error = 'PDF 파일을 선택해주세요.'
+            elif pdf_file.size > _GUIDE_PDF_MAX_BYTES:
+                error = (f'파일이 너무 큽니다({pdf_file.size / 1024 / 1024:.0f}MB). '
+                         f'무료 서버 메모리 한도 때문에 {_GUIDE_PDF_MAX_BYTES // 1024 // 1024}MB 이하로 '
+                         '단원별로 나눠서 올려주세요. 여러 번 올리면 이어서 쌓입니다.')
             else:
                 try:
                     page_offset = int(offset_raw) if offset_raw else 0
@@ -797,6 +801,10 @@ def guide_upload(request):
                     page_offset = 0
                 try:
                     pdf_bytes = pdf_file.read()
+                    # 스레드가 시작되기 전에 바로 '처리 중'으로 표시해서, 버튼을 두 번 눌러도
+                    # 같은 작업이 중복 실행되지 않도록 함
+                    _GUIDE_PDF_IMPORT_PROGRESS.update(
+                        {'running': True, 'done': 0, 'total': 0, 'name': name, 'error': ''})
                     threading.Thread(
                         target=_import_guide_pdf_background,
                         args=(pdf_bytes, page_offset, name),
@@ -804,6 +812,7 @@ def guide_upload(request):
                     ).start()
                     success = f'✓ [{name}] 업로드 접수! 백그라운드에서 페이지별로 정리 중입니다. 아래에서 진행 상황을 확인하세요.'
                 except Exception as e:
+                    _GUIDE_PDF_IMPORT_PROGRESS['running'] = False
                     error = f'업로드 중 오류: {e}'
         else:
             name        = request.POST.get('guide_name', '').strip() or '정보 교과 지도서'
@@ -3086,110 +3095,110 @@ def _guide_pages_text_for_range(start, end):
     return '\n\n'.join(parts)
 
 
-def _pdf_extract_pages_text(pdf_bytes):
-    """pdfplumber로 PDF를 페이지별 원문 리스트로 추출. 반환: [(pdf페이지번호, 원문), ...] (1부터 시작).
-    어느 단계(열기/특정 페이지)에서 멈추는지 진단할 수 있도록 단계별로 로그를 남김."""
-    import pdfplumber
-    print(f"[지도서 PDF] PDF 바이트 크기: {len(pdf_bytes):,} bytes", flush=True)
-    out = []
-    print("[지도서 PDF] pdfplumber.open() 시작", flush=True)
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        print(f"[지도서 PDF] pdfplumber.open() 완료, 총 {len(pdf.pages)}페이지", flush=True)
-        for i, page in enumerate(pdf.pages, start=1):
-            t = page.extract_text() or ''
-            out.append((i, t))
-            print(f"[지도서 PDF] {i}페이지 추출 완료 ({len(t)}자)", flush=True)
-    return out
+_GUIDE_PDF_CHUNK_PAGES = 3            # Claude에게 한 번에 보여줄 페이지 수
+_GUIDE_PDF_MAX_BYTES = 40 * 1024 * 1024  # 무료 서버 메모리(512MB) 보호용 업로드 상한
 
 
-def _clean_pages_with_claude(batch, page_offset):
-    """페이지 원문 배치를 Claude에게 보내 '개념 설명'만 남기고 정리.
-    batch: [(pdf페이지번호, 원문), ...]
-    page_offset: 교과서 실제 페이지 = pdf페이지번호 + page_offset
-    반환: {교과서페이지번호: 정리된_텍스트}
-    """
+def _clean_pdf_chunk_with_claude(chunk_bytes, first_book_page, n_pages):
+    """PDF 조각(몇 페이지)을 Claude에게 그대로 보여주고 '개념 설명'만 정리받음.
+    스캔(이미지) PDF도 Claude가 페이지를 직접 보고 읽으므로 글자 데이터가 없어도 됨.
+    first_book_page: 이 조각의 첫 페이지가 교과서 몇 페이지인지
+    반환: {교과서페이지번호: 정리된_텍스트}. 실패 시 예외를 그대로 올림(호출부에서 로그)."""
     api_key = os.environ.get('ANTHROPIC_API_KEY', '')
     if not api_key:
-        return {}
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
+        raise RuntimeError('ANTHROPIC_API_KEY가 설정되어 있지 않습니다.')
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
 
-        labeled = []
-        for pdf_num, text in batch:
-            book_num = pdf_num + page_offset
-            labeled.append(f"=== 교과서 {book_num}페이지 ===\n{text[:4000]}")
-        joined = '\n\n'.join(labeled)
+    mapping = ', '.join(f'{i}번째 페이지 = 교과서 {first_book_page + i - 1}쪽'
+                        for i in range(1, n_pages + 1))
+    prompt = f"""첨부한 PDF는 고등학교 정보 교과 지도서의 일부이며 총 {n_pages}페이지입니다.
+({mapping})
 
-        prompt = f"""아래는 고등학교 정보 교과서 지도서 PDF를 그대로 추출한 원문입니다.
-페이지별로 구분돼 있습니다.
+각 페이지에서 '학생이 이해해야 할 개념 설명' 내용만 골라 문장으로 정리해 주세요.
+그림·도표에 담긴 개념 설명은 글로 풀어서 포함하되, 다음은 모두 제외하세요:
+표지/머리말, 목차, 지도 방법·수업 진행 안내, 평가 기준·채점표, 저작권 표시, 쪽 번호.
+설명할 개념이 거의 없는 페이지는 text를 빈 문자열로 두세요.
 
-{joined}
+아래 JSON 형식으로만 응답하세요(설명 없이). index는 첨부 PDF 안에서의 순서(1부터)입니다:
+{{"pages": [{{"index": 1, "text": "정리된 설명"}}]}}"""
 
-각 페이지에서 '학생이 이해해야 할 개념 설명' 내용만 남기고 정리해 주세요.
-다음은 모두 제외하세요: 표지/머리말, 이미지 캡션만 있는 줄, 지도 방법·수업 진행 안내,
-평가 기준·채점표, 저작권 표시, 페이지 번호 자체, 목차.
-설명이 거의 없는 페이지(그림만 있거나 실습 안내만 있는 등)는 빈 문자열로 두세요.
-
-아래 JSON 형식으로만 응답하세요 (설명 없이):
-{{"pages": [{{"page": 교과서페이지번호(정수), "text": "정리된 설명 텍스트"}}]}}"""
-
-        msg = client.messages.create(
-            model=_ESCAPE_AI_MODEL,
-            max_tokens=4096,
-            output_config={'effort': 'low'},
-            messages=[{'role': 'user', 'content': prompt}],
-            timeout=60.0,  # 응답이 안 오고 무한정 걸리는 것을 방지
-        )
-        raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
-        m = re.search(r'\{[\s\S]*\}', raw)
-        if not m:
-            return {}
-        data = json.loads(m.group())
-        result = {}
-        for item in data.get('pages', []):
-            try:
-                num = int(item['page'])
-            except Exception:
-                continue
-            text = str(item.get('text', '')).strip()
-            if text:
-                result[num] = text
-        return result
-    except Exception as e:
-        print(f"지도서 PDF 페이지 정리 오류: {e}", flush=True)
-        return {}
+    msg = client.messages.create(
+        model=_ESCAPE_AI_MODEL,
+        max_tokens=8000,
+        output_config={'effort': 'low'},
+        messages=[{'role': 'user', 'content': [
+            {'type': 'document', 'source': {
+                'type': 'base64',
+                'media_type': 'application/pdf',
+                'data': base64.standard_b64encode(chunk_bytes).decode('ascii'),
+            }},
+            {'type': 'text', 'text': prompt},
+        ]}],
+        timeout=120.0,
+    )
+    raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
+    m = re.search(r'\{[\s\S]*\}', raw)
+    if not m:
+        raise ValueError(f'Claude 응답에서 JSON을 찾지 못함: {raw[:200]}')
+    data = json.loads(m.group())
+    result = {}
+    for item in data.get('pages', []):
+        try:
+            idx = int(item.get('index'))
+        except Exception:
+            continue
+        if not 1 <= idx <= n_pages:
+            continue
+        text = str(item.get('text', '')).strip()
+        if text:
+            result[first_book_page + idx - 1] = text
+    return result
 
 
 def _import_guide_pdf_background(pdf_bytes, page_offset, name):
-    """PDF를 페이지 단위 배치로 나눠 Claude로 정리해서 '배치가 끝날 때마다 바로' 시트에 저장.
-    (Render 무료 인스턴스가 이유 없이 재시작되는 경우가 있어서, 끝까지 기다렸다가
-    한 번에 저장하면 중간에 죽을 때 그동안 작업한 게 전부 날아간다. 배치마다 저장해두면
-    재시작되더라도 그 전까지 처리된 페이지는 남고, 다시 업로드하면 이어서 쌓인다.)"""
+    """PDF를 몇 페이지씩 잘라(pypdf) Claude에게 직접 보여주고, 조각이 끝날 때마다 바로 시트에 저장.
+    - pdfplumber 글자 추출 방식은 스캔(이미지) 지도서에서 0자만 나오고, 페이지당 10초 이상 걸리며
+      메모리를 많이 써서 무료 서버가 재시작되는 문제가 있어 교체함.
+    - pypdf로 자르는 작업은 이미지를 풀지 않아서 빠르고 가벼움.
+    - 조각마다 바로 저장하므로 중간에 서버가 재시작돼도 처리된 페이지는 남음."""
     import time
+    from pypdf import PdfReader, PdfWriter
     prog = _GUIDE_PDF_IMPORT_PROGRESS
-    print(f"[지도서 PDF] 시작: {name}", flush=True)
+    print(f"[지도서 PDF] 시작: {name} ({len(pdf_bytes):,} bytes, 보정값 {page_offset})", flush=True)
+    saved_count = 0
+    last_error = ''
     try:
-        pages = _pdf_extract_pages_text(pdf_bytes)
-        prog.update({'running': True, 'done': 0, 'total': len(pages), 'name': name, 'error': ''})
-        print(f"[지도서 PDF] 페이지 추출 완료: {len(pages)}페이지", flush=True)
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        total = len(reader.pages)
+        prog.update({'running': True, 'done': 0, 'total': total, 'name': name, 'error': ''})
+        print(f"[지도서 PDF] 총 {total}페이지, {_GUIDE_PDF_CHUNK_PAGES}페이지씩 처리", flush=True)
 
-        saved_count = 0
-        batch_size = 8
-        for i in range(0, len(pages), batch_size):
-            batch = pages[i:i + batch_size]
+        for start in range(0, total, _GUIDE_PDF_CHUNK_PAGES):
+            end = min(start + _GUIDE_PDF_CHUNK_PAGES, total)
+            first_book_page = start + 1 + page_offset
+            label = f"PDF {start + 1}~{end}쪽(교과서 {first_book_page}~{end + page_offset}쪽)"
             try:
-                cleaned = _clean_pages_with_claude(batch, page_offset)
+                writer = PdfWriter()
+                for idx in range(start, end):
+                    writer.add_page(reader.pages[idx])
+                buf = io.BytesIO()
+                writer.write(buf)
+                chunk = buf.getvalue()
+                cleaned = _clean_pdf_chunk_with_claude(chunk, first_book_page, end - start)
                 if cleaned:
-                    merged = _guide_pages_upsert(cleaned)
-                    saved_count = len(merged)
-                print(f"[지도서 PDF] 배치 {i}~{i+len(batch)} 처리 완료 (이번 배치 {len(cleaned)}페이지, 누적 저장 {saved_count}페이지)", flush=True)
+                    saved_count = len(_guide_pages_upsert(cleaned))
+                print(f"[지도서 PDF] {label} 완료: 내용 있는 페이지 {len(cleaned)}개, 누적 저장 {saved_count}개", flush=True)
             except Exception as e:
-                print(f"[지도서 PDF] 배치 처리 오류(페이지 {i}~{i+batch_size}): {e}", flush=True)
-            prog['done'] = min(i + batch_size, len(pages))
+                last_error = f"{label}: {e}"
+                print(f"[지도서 PDF] {label} 오류: {e}", flush=True)
+            prog['done'] = end
             time.sleep(1)  # API 순간 과다호출(레이트리밋) 방지
 
-        prog['error'] = '' if saved_count else '추출된 내용이 없습니다. PDF 내용을 확인해주세요.'
+        if saved_count:
+            prog['error'] = ''
+        else:
+            prog['error'] = last_error or '추출된 내용이 없습니다. PDF 내용을 확인해주세요.'
         print(f"[지도서 PDF] 전체 완료: 누적 저장 {saved_count}페이지", flush=True)
     except Exception as e:
         print(f"[지도서 PDF] 가져오기 오류: {e}", flush=True)
