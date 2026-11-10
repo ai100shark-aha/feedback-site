@@ -770,7 +770,11 @@ def _grade_with_claude(q_content, model_answer, ans_text, ans_code, ans_img_b64,
 # ── View: 교사 – 지도서 1회 업로드 ──────────────────────────────────
 
 def guide_upload(request):
-    """교사용: 지도서 텍스트를 입력받아 저장 (텍스트 전용 – PDF 업로드 제거)"""
+    """교사용: 지도서 등록.
+    - 텍스트 붙여넣기: 활동문제(quiz_generate) 채점용. 기존 방식 그대로.
+    - PDF 업로드(학기 전체): 방탈출 전용. 페이지별로 정리해서 구글시트에 저장,
+      학생이 적어낸 '오늘 배운 페이지'로 자동 매칭됨. DB를 거치지 않아
+      Render 재시작에도 안전함."""
     error = success = None
     guides = GuideBook.objects.all().order_by('-uploaded_at')
 
@@ -778,6 +782,29 @@ def guide_upload(request):
         pw = request.POST.get('password', '')
         if pw != TEACHER_PASSWORD:
             error = '비밀번호가 올바르지 않습니다.'
+        elif request.POST.get('form_type') == 'pdf':
+            pdf_file = request.FILES.get('guide_pdf')
+            offset_raw = request.POST.get('page_offset', '0').strip()
+            name = request.POST.get('pdf_name', '').strip() or '학기 전체 지도서'
+            if _GUIDE_PDF_IMPORT_PROGRESS['running']:
+                error = '이미 지도서 PDF를 처리 중입니다. 완료 후 다시 시도해주세요.'
+            elif not pdf_file:
+                error = 'PDF 파일을 선택해주세요.'
+            else:
+                try:
+                    page_offset = int(offset_raw) if offset_raw else 0
+                except ValueError:
+                    page_offset = 0
+                try:
+                    pdf_bytes = pdf_file.read()
+                    threading.Thread(
+                        target=_import_guide_pdf_background,
+                        args=(pdf_bytes, page_offset, name),
+                        daemon=True,
+                    ).start()
+                    success = f'✓ [{name}] 업로드 접수! 백그라운드에서 페이지별로 정리 중입니다. 아래에서 진행 상황을 확인하세요.'
+                except Exception as e:
+                    error = f'업로드 중 오류: {e}'
         else:
             name        = request.POST.get('guide_name', '').strip() or '정보 교과 지도서'
             manual_text = request.POST.get('manual_text', '').strip()
@@ -798,8 +825,12 @@ def guide_upload(request):
                 except Exception as e:
                     error = f'저장 중 오류: {e}'
 
+    pdf_pages_count = len(_guide_pages_load_all()) if not _GUIDE_PDF_IMPORT_PROGRESS['running'] else 0
+
     return render(request, 'feedback/guide_upload.html', {
         'error': error, 'success': success, 'guides': guides,
+        'pdf_progress': dict(_GUIDE_PDF_IMPORT_PROGRESS),
+        'pdf_pages_count': pdf_pages_count,
     })
 
 
@@ -2969,6 +3000,177 @@ def _guide_mirror_load_all():
     return out
 
 
+# ═══════════════════════════════════════════════════════════════
+#  학기 전체 지도서 PDF → 페이지별 원문 저장 (방탈출 전용)
+#  - 차시별 수동 등록(quiz_generate/QuizSet) 대신, 학기 초 PDF 한 번 업로드하면
+#    학생이 적어낸 "오늘 배운 페이지"로 바로 매칭해서 쓸 수 있도록 페이지 단위로 저장.
+#  - SQLite DB는 Render 재시작마다 사라지므로 애초에 DB를 거치지 않고
+#    구글시트에만 직접 저장(= 항상 durable).
+# ═══════════════════════════════════════════════════════════════
+_GUIDE_PAGES_SHEET_NAME = '지도서페이지'
+
+_GUIDE_PDF_IMPORT_PROGRESS = {'running': False, 'done': 0, 'total': 0, 'name': '', 'error': ''}
+
+
+def _guide_pages_sheet():
+    """지도서 페이지별 원문 탭 반환. 없으면 헤더까지 만들어서 생성."""
+    ss = get_sheet().spreadsheet
+    try:
+        return ss.worksheet(_GUIDE_PAGES_SHEET_NAME)
+    except Exception:
+        ws = ss.add_worksheet(title=_GUIDE_PAGES_SHEET_NAME, rows=500, cols=2)
+        ws.append_row(['페이지', '원문'])
+        return ws
+
+
+_GUIDE_PAGES_CACHE = {'data': None, 'at': 0}
+
+
+def _guide_pages_load_all():
+    """{페이지번호: 원문} 전체 반환. 5분 캐시."""
+    import time
+    if _GUIDE_PAGES_CACHE['data'] is not None and time.time() - _GUIDE_PAGES_CACHE['at'] < 300:
+        return _GUIDE_PAGES_CACHE['data']
+    out = {}
+    try:
+        rows = _guide_pages_sheet().get_all_values()[1:]
+        for r in rows:
+            if len(r) < 2:
+                continue
+            try:
+                out[int(r[0])] = r[1]
+            except ValueError:
+                continue
+    except Exception as e:
+        print(f"지도서 페이지 시트 읽기 오류: {e}")
+    _GUIDE_PAGES_CACHE['data'], _GUIDE_PAGES_CACHE['at'] = out, time.time()
+    return out
+
+
+def _guide_pages_save_all(page_dict):
+    """{페이지번호: 원문} 전체를 시트에 한 번에 덮어쓰기(학기 중 자주 하는 작업이 아니라
+    증분 upsert보다 전체 재작성이 더 간단하고 안전)."""
+    try:
+        ws = _guide_pages_sheet()
+        ws.clear()
+        rows = [['페이지', '원문']]
+        for num in sorted(page_dict.keys()):
+            rows.append([str(num), page_dict[num][:40000]])  # 셀당 5만자 제한 여유
+        ws.update('A1', rows)
+        _GUIDE_PAGES_CACHE['data'], _GUIDE_PAGES_CACHE['at'] = dict(page_dict), 0
+    except Exception as e:
+        print(f"지도서 페이지 시트 저장 오류: {e}")
+        raise
+
+
+def _guide_pages_text_for_range(start, end):
+    """페이지 범위(start~end)에 겹치는 저장된 원문들을 이어붙여 반환. 없으면 빈 문자열."""
+    pages = _guide_pages_load_all()
+    parts = []
+    for num in sorted(pages.keys()):
+        if start <= num <= end:
+            parts.append(pages[num])
+    return '\n\n'.join(parts)
+
+
+def _pdf_extract_pages_text(pdf_bytes):
+    """pdfplumber로 PDF를 페이지별 원문 리스트로 추출. 반환: [(pdf페이지번호, 원문), ...] (1부터 시작)"""
+    import pdfplumber
+    out = []
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for i, page in enumerate(pdf.pages, start=1):
+            t = page.extract_text() or ''
+            out.append((i, t))
+    return out
+
+
+def _clean_pages_with_claude(batch, page_offset):
+    """페이지 원문 배치를 Claude에게 보내 '개념 설명'만 남기고 정리.
+    batch: [(pdf페이지번호, 원문), ...]
+    page_offset: 교과서 실제 페이지 = pdf페이지번호 + page_offset
+    반환: {교과서페이지번호: 정리된_텍스트}
+    """
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if not api_key:
+        return {}
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        labeled = []
+        for pdf_num, text in batch:
+            book_num = pdf_num + page_offset
+            labeled.append(f"=== 교과서 {book_num}페이지 ===\n{text[:4000]}")
+        joined = '\n\n'.join(labeled)
+
+        prompt = f"""아래는 고등학교 정보 교과서 지도서 PDF를 그대로 추출한 원문입니다.
+페이지별로 구분돼 있습니다.
+
+{joined}
+
+각 페이지에서 '학생이 이해해야 할 개념 설명' 내용만 남기고 정리해 주세요.
+다음은 모두 제외하세요: 표지/머리말, 이미지 캡션만 있는 줄, 지도 방법·수업 진행 안내,
+평가 기준·채점표, 저작권 표시, 페이지 번호 자체, 목차.
+설명이 거의 없는 페이지(그림만 있거나 실습 안내만 있는 등)는 빈 문자열로 두세요.
+
+아래 JSON 형식으로만 응답하세요 (설명 없이):
+{{"pages": [{{"page": 교과서페이지번호(정수), "text": "정리된 설명 텍스트"}}]}}"""
+
+        msg = client.messages.create(
+            model=_ESCAPE_AI_MODEL,
+            max_tokens=4096,
+            output_config={'effort': 'low'},
+            messages=[{'role': 'user', 'content': prompt}],
+        )
+        raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
+        m = re.search(r'\{[\s\S]*\}', raw)
+        if not m:
+            return {}
+        data = json.loads(m.group())
+        result = {}
+        for item in data.get('pages', []):
+            try:
+                num = int(item['page'])
+            except Exception:
+                continue
+            text = str(item.get('text', '')).strip()
+            if text:
+                result[num] = text
+        return result
+    except Exception as e:
+        print(f"지도서 PDF 페이지 정리 오류: {e}")
+        return {}
+
+
+def _import_guide_pdf_background(pdf_bytes, page_offset, name):
+    """PDF를 페이지 단위 배치로 나눠 Claude로 정리한 뒤 시트에 전체 저장. 백그라운드 스레드에서 실행."""
+    import time
+    prog = _GUIDE_PDF_IMPORT_PROGRESS
+    try:
+        pages = _pdf_extract_pages_text(pdf_bytes)
+        prog.update({'running': True, 'done': 0, 'total': len(pages), 'name': name, 'error': ''})
+
+        all_pages = {}
+        batch_size = 8
+        for i in range(0, len(pages), batch_size):
+            batch = pages[i:i + batch_size]
+            try:
+                cleaned = _clean_pages_with_claude(batch, page_offset)
+                all_pages.update(cleaned)
+            except Exception as e:
+                print(f"지도서 PDF 배치 처리 오류(페이지 {i}~{i+batch_size}): {e}")
+            prog['done'] = min(i + batch_size, len(pages))
+            time.sleep(1)  # API 순간 과다호출(레이트리밋) 방지
+
+        _guide_pages_save_all(all_pages)
+        prog['error'] = '' if all_pages else '추출된 내용이 없습니다. PDF 내용을 확인해주세요.'
+    except Exception as e:
+        print(f"지도서 PDF 가져오기 오류: {e}")
+        prog['error'] = str(e)
+    finally:
+        prog['running'] = False
+
+
 def _parse_page_range(text):
     """'45-52', '45~52', 'p.45', '45,46' 등 자유 서식에서 (시작, 끝) 페이지를 추출.
     숫자를 못 찾으면 None."""
@@ -3035,37 +3237,48 @@ def _escape_match_chapter_by_pages(page_range, qsets_by_num, mirror):
 def _escape_textbook_context(lessons, max_chars=6000):
     """최근 차시들의 지도서 원문을 모아 반환.
 
-    차시 매칭 우선순위:
-    1) 그 수업에 학생들이 적어낸 '오늘 배운 교과서 페이지'로 실제 어떤 차시를 배웠는지 추정
-       (학교 행사 등으로 차시를 건너뛰어도 정확하게 매칭됨)
-    2) 페이지 신호가 없으면 "그 반의 n번째 수업 = 지도서 n차시"라는 기존 추정으로 폴백
-    DB(QuizSet)에 있으면 그걸 쓰고, Render 재시작으로 DB가 비어 있으면
-    구글시트 미러(_guide_mirror_load_all)에서 가져온다.
+    소스 우선순위 (차시별로 각각 결정):
+    1) 학기 전체 지도서 PDF를 페이지 단위로 저장해둔 것 (_guide_pages_text_for_range)
+       — 그 수업에 학생들이 적어낸 '오늘 배운 교과서 페이지'로 바로 조회. 가장 정확.
+    2) 위에서 못 찾으면 기존 방식: 페이지로 차시번호 추정 → QuizSet(DB)/구글시트 미러
+       (지도서원문 탭)에서 그 차시에 수동 등록된 내용을 찾음
+    3) 그래도 없으면 "그 반의 n번째 수업 = 지도서 n차시"라는 예전 추정으로 폴백
     """
     if not lessons:
         return ''
-    all_qsets = {qs.chapter_num: qs for qs in QuizSet.objects.exclude(range_text='')}
-    mirror = _guide_mirror_load_all()
-
-    chapter_nums = []
-    for l in lessons:
-        page_range = _escape_lesson_page_range(l['title'])
-        matched = _escape_match_chapter_by_pages(page_range, all_qsets, mirror)
-        chapter_nums.append(matched if matched is not None else l['id'] % 100)
-    chapter_nums = sorted(set(chapter_nums))
 
     parts = []
-    for num in chapter_nums:
-        qs = all_qsets.get(num)
-        title, body = '', ''
-        if qs and (qs.range_text or '').strip():
-            title, body = qs.title, qs.range_text.strip()
-        else:
-            m = mirror.get(num)
-            if m and (m.get('range_text') or '').strip():
-                title, body = m.get('title', f'{num}차시'), m['range_text'].strip()
+    need_chapter_lookup = []  # (lesson, page_range) — 1번에서 못 찾은 것들만 2)로 넘김
+
+    for l in lessons:
+        page_range = _escape_lesson_page_range(l['title'])
+        body = ''
+        if page_range:
+            body = _guide_pages_text_for_range(page_range[0], page_range[1])
         if body:
-            parts.append(f"[{title}]\n{body}")
+            parts.append(f"[{l['title']} · p.{page_range[0]}-{page_range[1]}]\n{body}")
+        else:
+            need_chapter_lookup.append((l, page_range))
+
+    if need_chapter_lookup:
+        all_qsets = {qs.chapter_num: qs for qs in QuizSet.objects.exclude(range_text='')}
+        mirror = _guide_mirror_load_all()
+        chapter_nums = []
+        for l, page_range in need_chapter_lookup:
+            matched = _escape_match_chapter_by_pages(page_range, all_qsets, mirror)
+            chapter_nums.append(matched if matched is not None else l['id'] % 100)
+        for num in sorted(set(chapter_nums)):
+            qs = all_qsets.get(num)
+            title, body = '', ''
+            if qs and (qs.range_text or '').strip():
+                title, body = qs.title, qs.range_text.strip()
+            else:
+                m = mirror.get(num)
+                if m and (m.get('range_text') or '').strip():
+                    title, body = m.get('title', f'{num}차시'), m['range_text'].strip()
+            if body:
+                parts.append(f"[{title}]\n{body}")
+
     return '\n\n'.join(parts)[:max_chars]
 
 
