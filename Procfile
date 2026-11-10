@@ -1,1 +1,1 @@
-web: gunicorn feedback_site.wsgi
+web: gunicorn feedback_site.wsgi --timeout 90

@@ -3153,6 +3153,7 @@ def _escape_generate_questions(class_name):
         msg = client.messages.create(
             model=_ESCAPE_AI_MODEL,
             max_tokens=2048,
+            output_config={'effort': 'low'},  # 단순 추출형 작업이라 생각 시간을 줄여 응답 속도 확보
             messages=[{'role': 'user', 'content': prompt}],
         )
         raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
