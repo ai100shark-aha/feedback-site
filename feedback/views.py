@@ -3104,20 +3104,20 @@ def _escape_generate_questions(class_name):
     피드백 신호가 부족하거나, 지도서 데이터가 없거나, API 호출이 실패하면
     조용히 폴백 문제 세트로 대체한다 (절대 빈 화면이 뜨지 않도록).
     """
-    lessons = _escape_recent_lessons(class_name, n=3)
-    textbook = _escape_textbook_context(lessons)
-    if not textbook:
-        return list(_ESCAPE_FALLBACK_QUESTIONS)
-
-    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
-    if not api_key:
-        return list(_ESCAPE_FALLBACK_QUESTIONS)
-
-    feedback_text, n_students = _escape_feedback_signal(class_name, lessons)
-    use_feedback = (n_students >= _ESCAPE_FEEDBACK_MIN_STUDENTS
-                     and len(feedback_text) >= _ESCAPE_FEEDBACK_MIN_CHARS)
-
     try:
+        lessons = _escape_recent_lessons(class_name, n=3)
+        textbook = _escape_textbook_context(lessons)
+        if not textbook:
+            return list(_ESCAPE_FALLBACK_QUESTIONS)
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+        if not api_key:
+            return list(_ESCAPE_FALLBACK_QUESTIONS)
+
+        feedback_text, n_students = _escape_feedback_signal(class_name, lessons)
+        use_feedback = (n_students >= _ESCAPE_FEEDBACK_MIN_STUDENTS
+                         and len(feedback_text) >= _ESCAPE_FEEDBACK_MIN_CHARS)
+
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         lesson_titles = ', '.join(l['title'] for l in lessons)
@@ -3456,15 +3456,20 @@ def escape_teacher(request):
     preview_questions = None
     preview_lessons = []
     preview_is_fallback = False
+    preview_error = None
     if preview_class in CLASS_ORDER:
-        preview_lessons = _escape_recent_lessons(preview_class, n=3)
-        if request.GET.get('force') == '1':
-            # 오늘 이미 캐시된(실패/폴백 포함) 문제를 지우고 강제로 다시 생성.
-            # API 순간 오류·레이트리밋 등으로 특정 반만 폴백 문제에 갇혔을 때 재배포 없이 복구하는 용도.
-            today = datetime.now().strftime('%Y-%m-%d')
-            _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today}", None)
-        preview_questions = _escape_get_daily_questions(preview_class)
-        preview_is_fallback = (preview_questions == _ESCAPE_FALLBACK_QUESTIONS)
+        try:
+            preview_lessons = _escape_recent_lessons(preview_class, n=3)
+            if request.GET.get('force') == '1':
+                # 오늘 이미 캐시된(실패/폴백 포함) 문제를 지우고 강제로 다시 생성.
+                # API 순간 오류·레이트리밋 등으로 특정 반만 폴백 문제에 갇혔을 때 재배포 없이 복구하는 용도.
+                today = datetime.now().strftime('%Y-%m-%d')
+                _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today}", None)
+            preview_questions = _escape_get_daily_questions(preview_class)
+            preview_is_fallback = (preview_questions == _ESCAPE_FALLBACK_QUESTIONS)
+        except Exception as e:
+            print(f"방탈출 미리보기 오류: {e}")
+            preview_error = str(e)
 
     return render(request, 'feedback/escape_teacher.html', {
         'hint_penalty': _ESCAPE_HINT_PENALTY_SEC,
@@ -3474,6 +3479,7 @@ def escape_teacher(request):
         'preview_questions': preview_questions,
         'preview_lessons': preview_lessons,
         'preview_is_fallback': preview_is_fallback,
+        'preview_error': preview_error,
         'period': period,
         'period_label': _ESCAPE_PERIOD_LABELS[period],
         'period_options': [('weekly', '주간'), ('monthly', '월간'), ('semester', '학기')],
