@@ -37,9 +37,19 @@
         {% if not preview_lessons %}
         <div class="small text-muted">{{ preview_class }}은(는) 아직 진행된 차시가 없어 미리볼 수 없습니다.</div>
         {% elif preview_questions %}
-        <div class="small text-muted mb-1">
-          근거 차시: {% for l in preview_lessons %}{{ l.title }}{% if not forloop.last %}, {% endif %}{% endfor %}
+        <div class="d-flex justify-content-between align-items-start mb-1">
+          <div class="small text-muted">
+            근거 차시: {% for l in preview_lessons %}{{ l.title }}{% if not forloop.last %}, {% endif %}{% endfor %}
+          </div>
+          <a href="?period={{ period }}&preview_class={{ preview_class }}&force=1"
+             class="btn btn-outline-secondary btn-sm py-0 flex-shrink-0 ms-2">🔄 다시 생성</a>
         </div>
+        {% if preview_is_fallback %}
+        <div class="alert alert-warning py-2 small mb-2">
+          ⚠️ AI 생성에 실패해서 고정 백업 문제가 나왔습니다 (지도서 내용과 무관할 수 있음).
+          "🔄 다시 생성"을 눌러보세요. 계속 반복되면 Render 로그에서 "방탈출 문제 생성 오류"를 확인해주세요.
+        </div>
+        {% endif %}
         <ol class="small mb-0">
           {% for q in preview_questions %}
           <li class="mb-1">
