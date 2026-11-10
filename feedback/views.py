@@ -3087,13 +3087,18 @@ def _guide_pages_text_for_range(start, end):
 
 
 def _pdf_extract_pages_text(pdf_bytes):
-    """pdfplumber로 PDF를 페이지별 원문 리스트로 추출. 반환: [(pdf페이지번호, 원문), ...] (1부터 시작)"""
+    """pdfplumber로 PDF를 페이지별 원문 리스트로 추출. 반환: [(pdf페이지번호, 원문), ...] (1부터 시작).
+    어느 단계(열기/특정 페이지)에서 멈추는지 진단할 수 있도록 단계별로 로그를 남김."""
     import pdfplumber
+    print(f"[지도서 PDF] PDF 바이트 크기: {len(pdf_bytes):,} bytes", flush=True)
     out = []
+    print("[지도서 PDF] pdfplumber.open() 시작", flush=True)
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        print(f"[지도서 PDF] pdfplumber.open() 완료, 총 {len(pdf.pages)}페이지", flush=True)
         for i, page in enumerate(pdf.pages, start=1):
             t = page.extract_text() or ''
             out.append((i, t))
+            print(f"[지도서 PDF] {i}페이지 추출 완료 ({len(t)}자)", flush=True)
     return out
 
 
@@ -3134,6 +3139,7 @@ def _clean_pages_with_claude(batch, page_offset):
             max_tokens=4096,
             output_config={'effort': 'low'},
             messages=[{'role': 'user', 'content': prompt}],
+            timeout=60.0,  # 응답이 안 오고 무한정 걸리는 것을 방지
         )
         raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
         m = re.search(r'\{[\s\S]*\}', raw)
