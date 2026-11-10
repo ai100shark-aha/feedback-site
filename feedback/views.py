@@ -3042,7 +3042,7 @@ def _guide_pages_load_all():
             except ValueError:
                 continue
     except Exception as e:
-        print(f"지도서 페이지 시트 읽기 오류: {e}")
+        print(f"지도서 페이지 시트 읽기 오류: {e}", flush=True)
     _GUIDE_PAGES_CACHE['data'], _GUIDE_PAGES_CACHE['at'] = out, time.time()
     return out
 
@@ -3058,7 +3058,7 @@ def _guide_pages_save_all(page_dict):
         ws.update('A1', rows)
         _GUIDE_PAGES_CACHE['data'], _GUIDE_PAGES_CACHE['at'] = dict(page_dict), 0
     except Exception as e:
-        print(f"지도서 페이지 시트 저장 오류: {e}")
+        print(f"지도서 페이지 시트 저장 오류: {e}", flush=True)
         raise
 
 
@@ -3151,7 +3151,7 @@ def _clean_pages_with_claude(batch, page_offset):
                 result[num] = text
         return result
     except Exception as e:
-        print(f"지도서 PDF 페이지 정리 오류: {e}")
+        print(f"지도서 PDF 페이지 정리 오류: {e}", flush=True)
         return {}
 
 
@@ -3162,11 +3162,11 @@ def _import_guide_pdf_background(pdf_bytes, page_offset, name):
     재시작되더라도 그 전까지 처리된 페이지는 남고, 다시 업로드하면 이어서 쌓인다.)"""
     import time
     prog = _GUIDE_PDF_IMPORT_PROGRESS
-    print(f"[지도서 PDF] 시작: {name}")
+    print(f"[지도서 PDF] 시작: {name}", flush=True)
     try:
         pages = _pdf_extract_pages_text(pdf_bytes)
         prog.update({'running': True, 'done': 0, 'total': len(pages), 'name': name, 'error': ''})
-        print(f"[지도서 PDF] 페이지 추출 완료: {len(pages)}페이지")
+        print(f"[지도서 PDF] 페이지 추출 완료: {len(pages)}페이지", flush=True)
 
         saved_count = 0
         batch_size = 8
@@ -3177,16 +3177,16 @@ def _import_guide_pdf_background(pdf_bytes, page_offset, name):
                 if cleaned:
                     merged = _guide_pages_upsert(cleaned)
                     saved_count = len(merged)
-                print(f"[지도서 PDF] 배치 {i}~{i+len(batch)} 처리 완료 (이번 배치 {len(cleaned)}페이지, 누적 저장 {saved_count}페이지)")
+                print(f"[지도서 PDF] 배치 {i}~{i+len(batch)} 처리 완료 (이번 배치 {len(cleaned)}페이지, 누적 저장 {saved_count}페이지)", flush=True)
             except Exception as e:
-                print(f"[지도서 PDF] 배치 처리 오류(페이지 {i}~{i+batch_size}): {e}")
+                print(f"[지도서 PDF] 배치 처리 오류(페이지 {i}~{i+batch_size}): {e}", flush=True)
             prog['done'] = min(i + batch_size, len(pages))
             time.sleep(1)  # API 순간 과다호출(레이트리밋) 방지
 
         prog['error'] = '' if saved_count else '추출된 내용이 없습니다. PDF 내용을 확인해주세요.'
-        print(f"[지도서 PDF] 전체 완료: 누적 저장 {saved_count}페이지")
+        print(f"[지도서 PDF] 전체 완료: 누적 저장 {saved_count}페이지", flush=True)
     except Exception as e:
-        print(f"[지도서 PDF] 가져오기 오류: {e}")
+        print(f"[지도서 PDF] 가져오기 오류: {e}", flush=True)
         prog['error'] = str(e)
     finally:
         prog['running'] = False
