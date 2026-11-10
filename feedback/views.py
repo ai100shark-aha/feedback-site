@@ -3048,8 +3048,7 @@ def _guide_pages_load_all():
 
 
 def _guide_pages_save_all(page_dict):
-    """{페이지번호: 원문} 전체를 시트에 한 번에 덮어쓰기(학기 중 자주 하는 작업이 아니라
-    증분 upsert보다 전체 재작성이 더 간단하고 안전)."""
+    """{페이지번호: 원문} 전체를 시트에 한 번에 덮어쓰기."""
     try:
         ws = _guide_pages_sheet()
         ws.clear()
@@ -3061,6 +3060,20 @@ def _guide_pages_save_all(page_dict):
     except Exception as e:
         print(f"지도서 페이지 시트 저장 오류: {e}")
         raise
+
+
+def _guide_pages_upsert(new_pages):
+    """{페이지번호: 원문} 일부를 기존 저장분과 합쳐서 저장(배치 단위 중간 저장용).
+    Render 인스턴스가 처리 도중 재시작돼도 이미 처리된 페이지는 보존하기 위함
+    (전체를 끝까지 메모리에만 들고 있다가 맨 마지막에 한 번만 저장하면, 중간에
+    프로세스가 죽을 경우 그동안 처리한 내용이 통째로 사라짐)."""
+    import time
+    _GUIDE_PAGES_CACHE['data'], _GUIDE_PAGES_CACHE['at'] = None, 0  # 캐시 무시하고 최신 상태 강제 재조회
+    existing = _guide_pages_load_all()
+    merged = dict(existing)
+    merged.update(new_pages)
+    _guide_pages_save_all(merged)
+    return merged
 
 
 def _guide_pages_text_for_range(start, end):
@@ -3143,29 +3156,37 @@ def _clean_pages_with_claude(batch, page_offset):
 
 
 def _import_guide_pdf_background(pdf_bytes, page_offset, name):
-    """PDF를 페이지 단위 배치로 나눠 Claude로 정리한 뒤 시트에 전체 저장. 백그라운드 스레드에서 실행."""
+    """PDF를 페이지 단위 배치로 나눠 Claude로 정리해서 '배치가 끝날 때마다 바로' 시트에 저장.
+    (Render 무료 인스턴스가 이유 없이 재시작되는 경우가 있어서, 끝까지 기다렸다가
+    한 번에 저장하면 중간에 죽을 때 그동안 작업한 게 전부 날아간다. 배치마다 저장해두면
+    재시작되더라도 그 전까지 처리된 페이지는 남고, 다시 업로드하면 이어서 쌓인다.)"""
     import time
     prog = _GUIDE_PDF_IMPORT_PROGRESS
+    print(f"[지도서 PDF] 시작: {name}")
     try:
         pages = _pdf_extract_pages_text(pdf_bytes)
         prog.update({'running': True, 'done': 0, 'total': len(pages), 'name': name, 'error': ''})
+        print(f"[지도서 PDF] 페이지 추출 완료: {len(pages)}페이지")
 
-        all_pages = {}
+        saved_count = 0
         batch_size = 8
         for i in range(0, len(pages), batch_size):
             batch = pages[i:i + batch_size]
             try:
                 cleaned = _clean_pages_with_claude(batch, page_offset)
-                all_pages.update(cleaned)
+                if cleaned:
+                    merged = _guide_pages_upsert(cleaned)
+                    saved_count = len(merged)
+                print(f"[지도서 PDF] 배치 {i}~{i+len(batch)} 처리 완료 (이번 배치 {len(cleaned)}페이지, 누적 저장 {saved_count}페이지)")
             except Exception as e:
-                print(f"지도서 PDF 배치 처리 오류(페이지 {i}~{i+batch_size}): {e}")
+                print(f"[지도서 PDF] 배치 처리 오류(페이지 {i}~{i+batch_size}): {e}")
             prog['done'] = min(i + batch_size, len(pages))
             time.sleep(1)  # API 순간 과다호출(레이트리밋) 방지
 
-        _guide_pages_save_all(all_pages)
-        prog['error'] = '' if all_pages else '추출된 내용이 없습니다. PDF 내용을 확인해주세요.'
+        prog['error'] = '' if saved_count else '추출된 내용이 없습니다. PDF 내용을 확인해주세요.'
+        print(f"[지도서 PDF] 전체 완료: 누적 저장 {saved_count}페이지")
     except Exception as e:
-        print(f"지도서 PDF 가져오기 오류: {e}")
+        print(f"[지도서 PDF] 가져오기 오류: {e}")
         prog['error'] = str(e)
     finally:
         prog['running'] = False
