@@ -3155,7 +3155,7 @@ def _escape_generate_questions(class_name):
             max_tokens=2048,
             messages=[{'role': 'user', 'content': prompt}],
         )
-        raw = msg.content[0].text
+        raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
         parsed = _escape_parse_ai_questions(raw)
         if parsed:
             return parsed
