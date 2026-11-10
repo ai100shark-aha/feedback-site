@@ -3455,9 +3455,16 @@ def escape_teacher(request):
     preview_class = request.GET.get('preview_class', '').strip()
     preview_questions = None
     preview_lessons = []
+    preview_is_fallback = False
     if preview_class in CLASS_ORDER:
         preview_lessons = _escape_recent_lessons(preview_class, n=3)
+        if request.GET.get('force') == '1':
+            # 오늘 이미 캐시된(실패/폴백 포함) 문제를 지우고 강제로 다시 생성.
+            # API 순간 오류·레이트리밋 등으로 특정 반만 폴백 문제에 갇혔을 때 재배포 없이 복구하는 용도.
+            today = datetime.now().strftime('%Y-%m-%d')
+            _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today}", None)
         preview_questions = _escape_get_daily_questions(preview_class)
+        preview_is_fallback = (preview_questions == _ESCAPE_FALLBACK_QUESTIONS)
 
     return render(request, 'feedback/escape_teacher.html', {
         'hint_penalty': _ESCAPE_HINT_PENALTY_SEC,
@@ -3466,6 +3473,7 @@ def escape_teacher(request):
         'preview_class': preview_class,
         'preview_questions': preview_questions,
         'preview_lessons': preview_lessons,
+        'preview_is_fallback': preview_is_fallback,
         'period': period,
         'period_label': _ESCAPE_PERIOD_LABELS[period],
         'period_options': [('weekly', '주간'), ('monthly', '월간'), ('semester', '학기')],
