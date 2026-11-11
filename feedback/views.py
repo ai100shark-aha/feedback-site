@@ -3727,8 +3727,10 @@ def escape_teacher(request):
             if request.GET.get('force') == '1':
                 # 오늘 이미 캐시된(실패/폴백 포함) 문제를 지우고 강제로 다시 생성.
                 # API 순간 오류·레이트리밋 등으로 특정 반만 폴백 문제에 갇혔을 때 재배포 없이 복구하는 용도.
-                today = datetime.now().strftime('%Y-%m-%d')
-                _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today}", None)
+                # 주의: 위에서 쓰는 날짜 변수 today를 덮어쓰면 아래 this_month 계산에서
+                # 500 에러가 나므로 다른 이름을 씀
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today_str}", None)
             preview_questions = _escape_get_daily_questions(preview_class)
             preview_is_fallback = (preview_questions == _ESCAPE_FALLBACK_QUESTIONS)
         except Exception as e:

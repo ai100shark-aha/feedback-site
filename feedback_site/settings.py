@@ -126,3 +126,16 @@ FILE_UPLOAD_MAX_MEMORY_SIZE  = 10 * 1024 * 1024   # 10 MB
 
 # 세션 유지 시간
 SESSION_COOKIE_AGE = 3600  # 1시간
+
+# 운영(DEBUG=False)에서도 500 에러의 원인(traceback)이 Render 로그에 찍히도록 콘솔로 출력.
+# (기본 설정은 DEBUG=False일 때 에러를 관리자 메일로만 보내서 로그에 아무것도 안 남음)
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler'},
+    },
+    'loggers': {
+        'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
+    },
+}
