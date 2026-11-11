@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>교사용 지도서 등록</title>
+  {% if pdf_progress.running %}
+  {# 처리 중일 때만 5초마다 자동 새로고침 (업로드를 다시 보내지 않는 일반 주소로) #}
+  <meta http-equiv="refresh" content="5;url=/guide/upload/">
+  {% endif %}
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
@@ -35,11 +39,20 @@
 
       {% if pdf_progress.running %}
       <div class="alert alert-warning py-2 small mb-2">
-        ⏳ [{{ pdf_progress.name }}] 처리 중... {{ pdf_progress.done }}/{{ pdf_progress.total }} 페이지
-        (새로고침해서 진행 상황을 확인하세요. 수십 페이지 기준 몇 분 정도 걸릴 수 있습니다.)
+        ⏳ <b>처리 중</b> — [{{ pdf_progress.name }}]
+        {% if pdf_progress.total %}{{ pdf_progress.done }}/{{ pdf_progress.total }}페이지 확인{% else %}PDF 여는 중{% endif %}
+        · 지금까지 저장 {{ pdf_progress.saved }}페이지<br>
+        <span class="text-muted">이 화면은 5초마다 자동으로 새로고침됩니다. 창을 닫아도 처리는 계속됩니다.</span>
       </div>
       {% elif pdf_progress.error %}
-      <div class="alert alert-danger py-2 small mb-2">⚠️ 마지막 처리 중 오류: {{ pdf_progress.error }}</div>
+      <div class="alert alert-danger py-2 small mb-2">
+        ⚠️ <b>마지막 처리 실패</b>{% if pdf_progress.finished_at %} ({{ pdf_progress.finished_at }}){% endif %}: {{ pdf_progress.error }}
+      </div>
+      {% elif pdf_progress.finished_at %}
+      <div class="alert alert-success py-2 small mb-2">
+        ✓ <b>처리 완료</b> ({{ pdf_progress.finished_at }}) — [{{ pdf_progress.name }}]
+        {{ pdf_progress.total }}페이지 확인, 내용 있는 페이지 저장 완료
+      </div>
       {% endif %}
 
       <div class="small text-muted mb-2">현재 저장된 페이지 수: <b>{{ pdf_pages_count }}</b>개</div>
