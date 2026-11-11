@@ -3464,6 +3464,7 @@ def _escape_log(row):
 
 
 _ESCAPE_AWARD_MIN_DAYS = 10   # 이달의 시상 대상: 이번 달 이만큼 이상(날 수) 참여한 학생만
+_ESCAPE_CLASSES = ['1반', '2반', '3반', '4반', '5반']   # 매일방탈출 참여·집계 대상(정보 수업 반)
 _KST_OFFSET = timedelta(hours=9)
 
 
@@ -3536,9 +3537,22 @@ def escape_start(request):
         student_name = request.POST.get('student_name', '').strip()
         error = _escape_validate(student_id, student_num, student_name)
 
+        if not error and _class_from_student_id(student_id) not in _ESCAPE_CLASSES:
+            error = '매일방탈출은 1~5반(정보 수업) 학생만 참여할 수 있어요. 학번을 다시 확인해주세요.'
+
+        rows = None
+        if not error:
+            rows = _escape_rows()
+            # 같은 학번으로 다른 이름의 기록이 이미 있으면 학번을 잘못 친 경우가 대부분이라 막는다.
+            # (예: 다른 반 학생이 반 번호를 잘못 쳐서 남의 학번으로 기록되는 일)
+            prev_names = {r['student_name'].replace(' ', '') for r in (rows or [])
+                          if r['student_id'] == student_id}
+            if prev_names and student_name.replace(' ', '') not in prev_names:
+                error = (f'학번 {student_id}은(는) 다른 이름으로 참여한 기록이 있어요. '
+                         '학번을 다시 확인해주세요. 내 학번이 맞다면 선생님께 알려주세요.')
+
         if not error:
             today = _kst_today_str()
-            rows = _escape_rows()
             done = next((r for r in (rows or [])
                          if r['student_id'] == student_id and r['date'] == today), None)
             if done:
@@ -3722,6 +3736,73 @@ def _escape_unpack_class(ranked):
     return out
 
 
+def _escape_award_list(groups, n=3):
+    """시상 칸 목록: 기준(_ESCAPE_AWARD_MIN_DAYS일)을 채운 학생을 먼저, 자리가 남으면 아직
+    도전 중인 학생으로 채운다(동기 부여용). groups는 평균 기록 순으로 정렬돼 있음."""
+    elig = [g for g in groups if g['count'] >= _ESCAPE_AWARD_MIN_DAYS]
+    rest = [g for g in groups if g['count'] < _ESCAPE_AWARD_MIN_DAYS]
+    out = _escape_unpack_personal((elig + rest)[:n])
+    for o in out:
+        o['eligible'] = o['count'] >= _ESCAPE_AWARD_MIN_DAYS
+        o['days_left'] = max(0, _ESCAPE_AWARD_MIN_DAYS - o['count'])
+    return out
+
+
+def _escape_find_rows(values, cls='', sid='', name=''):
+    """방탈출 시트 전체 값에서 조건(반·학번·이름, 비어 있으면 무시)에 모두 맞는 행을 찾음.
+    반환: [(시트 행 번호, 표시용 dict), ...]. 조건이 하나도 없으면 빈 목록(전체 삭제 방지)."""
+    if not (cls or sid or name):
+        return []
+    name_n = name.replace(' ', '')
+    out = []
+    for i, r in enumerate(values[1:], start=2):
+        if len(r) < 10:
+            continue
+        if cls and r[5].strip() != cls:
+            continue
+        if sid and r[2].strip() != sid:
+            continue
+        if name_n and r[4].replace(' ', '') != name_n:
+            continue
+        try:
+            when = (datetime.strptime(r[0].strip(), '%Y-%m-%d %H:%M:%S') + _KST_OFFSET).strftime('%m/%d %H:%M')
+        except ValueError:
+            when = r[1]
+        out.append((i, {'row': i, 'when': when, 'student_id': r[2], 'student_name': r[4],
+                        'class_name': r[5], 'final': r[9]}))
+    return out
+
+
+def escape_cleanup(request):
+    """교사용: 테스트·잘못된 방탈출 기록을 시트에서 삭제. 미리보기에서 본 조건 그대로 다시 찾아 지운다."""
+    if not request.session.get('teacher_auth'):
+        return redirect('teacher_dashboard')
+    if request.method != 'POST':
+        return redirect('escape_teacher')
+    from urllib.parse import urlencode
+    cls = request.POST.get('clean_class', '').strip()
+    sid = request.POST.get('clean_id', '').strip()
+    name = request.POST.get('clean_name', '').strip()
+    try:
+        ws = _escape_sheet()
+        rows_idx = [i for i, _ in _escape_find_rows(ws.get_all_values(), cls, sid, name)]
+        # 아래쪽 행부터, 붙어 있는 행은 한 번에 지운다(위부터 지우면 행 번호가 밀림)
+        rows_idx.sort(reverse=True)
+        k = 0
+        while k < len(rows_idx):
+            end = start = rows_idx[k]
+            while k + 1 < len(rows_idx) and rows_idx[k + 1] == start - 1:
+                k += 1
+                start = rows_idx[k]
+            ws.delete_rows(start, end)
+            k += 1
+        msg = f'✓ {len(rows_idx)}건을 삭제했습니다.' if rows_idx else '조건에 맞는 기록이 없어 지우지 않았습니다.'
+    except Exception as e:
+        print(f"방탈출 기록 삭제 오류: {e}", flush=True)
+        msg = f'삭제 중 오류가 났습니다: {e}'
+    return redirect('/escape/teacher/?' + urlencode({'clean_msg': msg}))
+
+
 _ESCAPE_PERIOD_LABELS = {'weekly': '이번 주', 'monthly': '이번 달', 'semester': '학기 전체(누적)'}
 
 
@@ -3731,6 +3812,7 @@ def escape_teacher(request):
         return redirect('teacher_dashboard')
 
     rows = _escape_dedupe_daily(_escape_rows() or [])
+    rows = [r for r in rows if _class_from_student_id(r['student_id']) in _ESCAPE_CLASSES]
     today = _kst_now().date()
 
     # ── 기간 선택 (주간/월간/학기) ──
@@ -3747,19 +3829,28 @@ def escape_teacher(request):
     # 매일 참여한 학생보다 앞서는 것을 막기 위함). 참여 횟수 = 참여한 날 수(하루 1회만 인정).
     month_rows = _escape_period_rows(rows, 'monthly', today)
     month_ranked = _escape_rank(month_rows, lambda r: r['student_id'])
-    eligible = [g for g in month_ranked if g['count'] >= _ESCAPE_AWARD_MIN_DAYS]
-    grade_award = _escape_unpack_personal(eligible)[:3]
+    grade_award = _escape_award_list(month_ranked)
     class_awards = {}
-    for cls in CLASS_ORDER:
-        cls_groups = [g for g in month_ranked if _escape_student_label(g['items'])[1] == cls]
+    for cls in _ESCAPE_CLASSES:
+        cls_groups = [g for g in month_ranked if _class_from_student_id(g['key']) == cls]
         if not cls_groups:
             continue
-        cls_eligible = [g for g in cls_groups if g['count'] >= _ESCAPE_AWARD_MIN_DAYS]
         class_awards[cls] = {
-            'top3': _escape_unpack_personal(cls_eligible)[:3],
-            'eligible': len(cls_eligible),
+            'top3': _escape_award_list(cls_groups),
+            'eligible': sum(1 for g in cls_groups if g['count'] >= _ESCAPE_AWARD_MIN_DAYS),
             'participants': len(cls_groups),
         }
+
+    # ── 기록 지우기(미리보기): 조건에 맞는 시트 기록을 보여 주고, 삭제는 escape_cleanup에서 ──
+    clean = {k: request.GET.get(f'clean_{k}', '').strip() for k in ('class', 'id', 'name')}
+    clean_matches = None
+    if any(clean.values()):
+        try:
+            values = _escape_sheet().get_all_values()
+            clean_matches = [m for _, m in _escape_find_rows(values, clean['class'], clean['id'], clean['name'])]
+        except Exception as e:
+            print(f"방탈출 기록 검색 오류: {e}", flush=True)
+            clean_matches = []
 
     # 반별 문제 미리보기: 요청 시에만 생성(캐시 활용) — 대시보드 열 때마다 전체 반을 AI로 생성하지 않도록
     preview_class = request.GET.get('preview_class', '').strip()
@@ -3767,7 +3858,7 @@ def escape_teacher(request):
     preview_lessons = []
     preview_is_fallback = False
     preview_error = None
-    if preview_class in CLASS_ORDER:
+    if preview_class in _ESCAPE_CLASSES:
         try:
             preview_lessons = _escape_recent_lessons(preview_class, n=3)
             if request.GET.get('force') == '1':
@@ -3786,7 +3877,11 @@ def escape_teacher(request):
     return render(request, 'feedback/escape_teacher.html', {
         'hint_penalty': _ESCAPE_HINT_PENALTY_SEC,
         'wrong_penalty': _ESCAPE_WRONG_PENALTY_SEC,
-        'all_classes': CLASS_ORDER,
+        'all_classes': _ESCAPE_CLASSES,
+        'clean_classes': CLASS_ORDER,
+        'clean': clean,
+        'clean_matches': clean_matches,
+        'clean_msg': request.GET.get('clean_msg', ''),
         'preview_class': preview_class,
         'preview_questions': preview_questions,
         'preview_lessons': preview_lessons,

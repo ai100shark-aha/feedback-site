@@ -76,7 +76,8 @@
 
   <!-- ══ 이달의 시상 (항상 이번 달 기준, 선택 기간과 무관) ══ -->
   <h5 class="fw-bold mt-4 mb-1">🏆 {{ this_month }} 시상 대상 (월 1회 시상)</h5>
-  <div class="small text-muted mb-2">이번 달 <b>{{ award_min_days }}일 이상</b> 참여한 학생 중 평균 기록이 짧은 순서입니다. 참여는 하루 1회만 인정합니다.</div>
+  <div class="small text-muted mb-2">이번 달 <b>{{ award_min_days }}일 이상</b> 참여한 학생이 시상 대상입니다(참여는 하루 1회만 인정).
+    대상 학생을 먼저 보여 주고, 자리가 남으면 아직 도전 중인 학생을 평균 기록 순으로 보여 줍니다.</div>
 
   <div class="card shadow-sm mb-2 border-warning">
     <div class="card-body py-2">
@@ -84,11 +85,11 @@
       {% if grade_award %}
       <ol class="mb-0 small">
         {% for r in grade_award %}
-        <li>{{ r.student_name }} ({{ r.class_name }}) — 평균 {{ r.avg_final }}초 · {{ r.count }}일 참여</li>
+        <li>{{ r.student_name }} ({{ r.class_name }}) — 평균 {{ r.avg_final }}초 · {{ r.count }}일 참여 {% if r.eligible %}<span class="badge bg-success-subtle text-success-emphasis">시상 대상</span>{% else %}<span class="badge bg-secondary-subtle text-secondary-emphasis">{{ r.days_left }}일 더</span>{% endif %}</li>
         {% endfor %}
       </ol>
       {% else %}
-      <div class="small text-muted">아직 이번 달 {{ award_min_days }}일 이상 참여한 학생이 없습니다.</div>
+      <div class="small text-muted">이번 달 기록이 아직 없습니다.</div>
       {% endif %}
     </div>
   </div>
@@ -102,11 +103,9 @@
           {% if info.top3 %}
           <ol class="mb-0 small ps-3">
             {% for r in info.top3 %}
-            <li>{{ r.student_name }} — {{ r.avg_final }}초 · {{ r.count }}일</li>
+            <li>{{ r.student_name }} — {{ r.avg_final }}초 · {{ r.count }}일 {% if r.eligible %}<span class="badge bg-success-subtle text-success-emphasis">시상 대상</span>{% else %}<span class="badge bg-secondary-subtle text-secondary-emphasis">{{ r.days_left }}일 더</span>{% endif %}</li>
             {% endfor %}
           </ol>
-          {% else %}
-          <div class="small text-muted">{{ award_min_days }}일 이상 참여자 없음</div>
           {% endif %}
         </div>
       </div>
@@ -167,6 +166,52 @@
           </tbody>
         </table>
       </div>
+    </div>
+  </div>
+
+  <!-- ══ 기록 지우기 (테스트·잘못된 기록) ══ -->
+  <h5 class="fw-bold mt-4 mb-1">🧹 기록 지우기</h5>
+  <div class="small text-muted mb-2">테스트로 남긴 기록이나 학번을 잘못 친 기록을 구글 시트에서 지웁니다. 먼저 찾아본 뒤 지울 수 있고, <b>지운 기록은 되돌릴 수 없습니다.</b></div>
+  {% if clean_msg %}<div class="alert alert-info py-2 small">{{ clean_msg }}</div>{% endif %}
+  <div class="card shadow-sm mb-5">
+    <div class="card-body py-2">
+      <form method="GET" class="row g-2 align-items-center">
+        <div class="col-4 col-md-3">
+          <select name="clean_class" class="form-select form-select-sm">
+            <option value="">반 (전체)</option>
+            {% for c in clean_classes %}<option value="{{ c }}" {% if c == clean.class %}selected{% endif %}>{{ c }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="col-4 col-md-3"><input name="clean_id" value="{{ clean.id }}" class="form-control form-control-sm" placeholder="학번"></div>
+        <div class="col-4 col-md-3"><input name="clean_name" value="{{ clean.name }}" class="form-control form-control-sm" placeholder="이름"></div>
+        <div class="col-12 col-md-3"><button class="btn btn-outline-secondary btn-sm w-100">찾기</button></div>
+        <div class="col-12 small text-muted">입력한 조건을 모두 만족하는 기록만 찾습니다. 예: 반=8반 → 8반 기록 전체 / 이름=홍길동 → 그 이름으로 남은 기록 전체</div>
+      </form>
+      {% if clean_matches is not None %}
+      <hr class="my-2">
+      {% if clean_matches %}
+      <div class="small fw-bold mb-1">찾은 기록 {{ clean_matches|length }}건</div>
+      <div class="table-responsive" style="max-height:260px;overflow:auto">
+        <table class="table table-sm small mb-2">
+          <thead><tr><th>시각</th><th>학번</th><th>이름</th><th>반</th><th>최종(초)</th></tr></thead>
+          <tbody>
+            {% for m in clean_matches %}
+            <tr><td>{{ m.when }}</td><td>{{ m.student_id }}</td><td>{{ m.student_name }}</td><td>{{ m.class_name }}</td><td>{{ m.final }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <form method="POST" action="/escape/teacher/cleanup/" onsubmit="return confirm('찾은 기록 {{ clean_matches|length }}건을 지웁니다. 되돌릴 수 없습니다. 계속할까요?');">
+        {% csrf_token %}
+        <input type="hidden" name="clean_class" value="{{ clean.class }}">
+        <input type="hidden" name="clean_id" value="{{ clean.id }}">
+        <input type="hidden" name="clean_name" value="{{ clean.name }}">
+        <button class="btn btn-danger btn-sm">이 {{ clean_matches|length }}건 지우기</button>
+      </form>
+      {% else %}
+      <div class="small text-muted">조건에 맞는 기록이 없습니다.</div>
+      {% endif %}
+      {% endif %}
     </div>
   </div>
 

@@ -44,4 +44,5 @@ urlpatterns = [
     path('escape/', views.escape_start, name='escape_start'),
     path('escape/play/', views.escape_play, name='escape_play'),
     path('escape/teacher/', views.escape_teacher, name='escape_teacher'),
+    path('escape/teacher/cleanup/', views.escape_cleanup, name='escape_cleanup'),
 ]
