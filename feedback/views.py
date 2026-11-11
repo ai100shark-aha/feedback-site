@@ -804,16 +804,22 @@ def guide_upload(request):
                     # 스레드가 시작되기 전에 바로 '처리 중'으로 표시해서, 버튼을 두 번 눌러도
                     # 같은 작업이 중복 실행되지 않도록 함
                     _GUIDE_PDF_IMPORT_PROGRESS.update(
-                        {'running': True, 'done': 0, 'total': 0, 'name': name, 'error': ''})
+                        {'running': True, 'done': 0, 'total': 0, 'name': name, 'error': '',
+                         'saved': 0, 'finished_at': ''})
                     threading.Thread(
                         target=_import_guide_pdf_background,
                         args=(pdf_bytes, page_offset, name),
                         daemon=True,
                     ).start()
-                    success = f'✓ [{name}] 업로드 접수! 백그라운드에서 페이지별로 정리 중입니다. 아래에서 진행 상황을 확인하세요.'
+                    success = f'✓ [{name}] 업로드 접수! 페이지별로 정리 중입니다. 이 화면은 처리가 끝날 때까지 5초마다 자동으로 새로고침됩니다.'
                 except Exception as e:
                     _GUIDE_PDF_IMPORT_PROGRESS['running'] = False
                     error = f'업로드 중 오류: {e}'
+            # 업로드 결과를 담아 일반 화면(GET)으로 넘김. 이렇게 하지 않으면
+            # 결과 화면에서 F5를 누를 때마다 브라우저가 PDF를 다시 보내 처리가 처음부터 재시작됨.
+            from urllib.parse import urlencode
+            params = {'err': error} if error else {'msg': success}
+            return redirect('/guide/upload/?' + urlencode(params))
         else:
             name        = request.POST.get('guide_name', '').strip() or '정보 교과 지도서'
             manual_text = request.POST.get('manual_text', '').strip()
@@ -834,7 +840,11 @@ def guide_upload(request):
                 except Exception as e:
                     error = f'저장 중 오류: {e}'
 
-    pdf_pages_count = len(_guide_pages_load_all()) if not _GUIDE_PDF_IMPORT_PROGRESS['running'] else 0
+    if request.method == 'GET':
+        error = request.GET.get('err') or None
+        success = request.GET.get('msg') or None
+
+    pdf_pages_count = len(_guide_pages_load_all())
 
     return render(request, 'feedback/guide_upload.html', {
         'error': error, 'success': success, 'guides': guides,
@@ -3018,7 +3028,8 @@ def _guide_mirror_load_all():
 # ═══════════════════════════════════════════════════════════════
 _GUIDE_PAGES_SHEET_NAME = '지도서페이지'
 
-_GUIDE_PDF_IMPORT_PROGRESS = {'running': False, 'done': 0, 'total': 0, 'name': '', 'error': ''}
+_GUIDE_PDF_IMPORT_PROGRESS = {'running': False, 'done': 0, 'total': 0, 'name': '', 'error': '',
+                              'saved': 0, 'finished_at': ''}
 
 
 def _guide_pages_sheet():
@@ -3188,6 +3199,7 @@ def _import_guide_pdf_background(pdf_bytes, page_offset, name):
                 cleaned = _clean_pdf_chunk_with_claude(chunk, first_book_page, end - start)
                 if cleaned:
                     saved_count = len(_guide_pages_upsert(cleaned))
+                    prog['saved'] = saved_count
                 print(f"[지도서 PDF] {label} 완료: 내용 있는 페이지 {len(cleaned)}개, 누적 저장 {saved_count}개", flush=True)
             except Exception as e:
                 last_error = f"{label}: {e}"
@@ -3204,6 +3216,8 @@ def _import_guide_pdf_background(pdf_bytes, page_offset, name):
         print(f"[지도서 PDF] 가져오기 오류: {e}", flush=True)
         prog['error'] = str(e)
     finally:
+        from zoneinfo import ZoneInfo
+        prog['finished_at'] = datetime.now(ZoneInfo('Asia/Seoul')).strftime('%m/%d %H:%M')
         prog['running'] = False
 
 
