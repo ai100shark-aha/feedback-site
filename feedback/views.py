@@ -3431,7 +3431,7 @@ def _escape_generate_questions(class_name):
 
 def _escape_get_daily_questions(class_name):
     """오늘·이 반의 3문제를 캐시에서 가져오거나, 없으면 생성해서 캐시에 저장."""
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = _kst_today_str()
     key = f"{class_name}|{today}"
     cached = _ESCAPE_DAILY_CACHE.get(key)
     if cached:
@@ -3463,8 +3463,25 @@ def _escape_log(row):
     threading.Thread(target=job, daemon=True).start()
 
 
+_ESCAPE_AWARD_MIN_DAYS = 10   # 이달의 시상 대상: 이번 달 이만큼 이상(날 수) 참여한 학생만
+_KST_OFFSET = timedelta(hours=9)
+
+
+def _kst_now():
+    """한국 시각(naive). 서버(Render)는 UTC라서 datetime.now()를 그대로 쓰면 오전 9시 전
+    (1교시 8:30 수업 등)의 기록이 전날 날짜로 잡힌다."""
+    from datetime import timezone
+    return datetime.now(timezone.utc).replace(tzinfo=None) + _KST_OFFSET
+
+
+def _kst_today_str():
+    return _kst_now().strftime('%Y-%m-%d')
+
+
 def _escape_rows():
-    """시트 전체 값(헤더 제외)을 dict 리스트로 반환. 실패 시 None."""
+    """시트 전체 값(헤더 제외)을 dict 리스트로 반환. 실패 시 None.
+    'date'는 시트 B열(예전 기록은 UTC 기준으로 적혀 있음) 대신 A열 시각(UTC)에
+    9시간을 더한 한국 날짜로 계산한다. 그래야 오전 9시 전 기록도 그날로 집계된다."""
     for attempt in range(2):
         try:
             rows = _escape_sheet().get_all_values()[1:]
@@ -3473,9 +3490,16 @@ def _escape_rows():
                 if len(r) < 10:
                     continue
                 try:
+                    stamp = None
+                    try:
+                        stamp = datetime.strptime(r[0].strip(), '%Y-%m-%d %H:%M:%S')
+                    except ValueError:
+                        pass
+                    kst_date = (stamp + _KST_OFFSET).strftime('%Y-%m-%d') if stamp else r[1]
                     out.append({
-                        'date': r[1], 'student_id': r[2], 'student_num': r[3],
-                        'student_name': r[4], 'class_name': r[5],
+                        'stamp': stamp, 'date': kst_date,
+                        'student_id': r[2].strip(), 'student_num': r[3],
+                        'student_name': r[4].strip(), 'class_name': r[5],
                         'duration': float(r[6]), 'hints': int(r[7]),
                         'penalty': float(r[8]), 'final': float(r[9]),
                     })
@@ -3513,7 +3537,7 @@ def escape_start(request):
         error = _escape_validate(student_id, student_num, student_name)
 
         if not error:
-            today = datetime.now().strftime('%Y-%m-%d')
+            today = _kst_today_str()
             rows = _escape_rows()
             done = next((r for r in (rows or [])
                          if r['student_id'] == student_id and r['date'] == today), None)
@@ -3604,7 +3628,7 @@ def _escape_finish(request):
     duration = max(0, (datetime.now() - start_dt).total_seconds())
     penalty = hints * _ESCAPE_HINT_PENALTY_SEC + wrong * _ESCAPE_WRONG_PENALTY_SEC
     final = duration + penalty
-    today = datetime.now().strftime('%Y-%m-%d')
+    today = _kst_today_str()
 
     result = {
         'date': today, 'student_id': student['student_id'],
@@ -3626,6 +3650,26 @@ def _escape_finish(request):
     return render(request, 'feedback/escape_result.html', {
         'already': False, 'result': result,
     })
+
+
+def _escape_dedupe_daily(rows):
+    """같은 학생이 같은 날(한국 날짜) 여러 번 기록된 경우 첫 기록 하나만 남김.
+    (창을 두 개 열고 동시에 시작하거나, 시트 읽기가 잠깐 실패하면 하루에 두 번 기록될 수 있음)"""
+    seen = set()
+    out = []
+    for r in sorted(rows, key=lambda x: (x['stamp'] or datetime.min)):
+        k = (r['student_id'], r['date'])
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
+
+
+def _escape_student_label(items):
+    """한 학생의 기록들 중 가장 최근 기록의 이름·반을 대표로 씀(이름을 날마다 다르게 쳐도 한 사람으로 묶기 위함)."""
+    last = max(items, key=lambda x: (x['stamp'] or datetime.min))
+    return last['student_name'], last['class_name']
 
 
 def _escape_rank(rows, key_fn, final_key='final'):
@@ -3650,7 +3694,7 @@ def _escape_date(r):
 
 def _escape_period_rows(rows, period, today=None):
     """period: 'weekly'(이번 주) | 'monthly'(이번 달) | 'semester'(전체 누적)"""
-    today = today or datetime.now().date()
+    today = today or _kst_now().date()
     if period == 'monthly':
         prefix = today.strftime('%Y-%m')
         return [r for r in rows if r['date'].startswith(prefix)]
@@ -3662,10 +3706,11 @@ def _escape_period_rows(rows, period, today=None):
 
 
 def _escape_unpack_personal(ranked):
+    """ranked: 학번(student_id)으로 묶은 _escape_rank 결과."""
     out = []
     for i, g in enumerate(ranked, start=1):
-        sid, sname, cname = g['key']
-        out.append({'rank': i, 'student_id': sid, 'student_name': sname,
+        sname, cname = _escape_student_label(g['items'])
+        out.append({'rank': i, 'student_id': g['key'], 'student_name': sname,
                     'class_name': cname, 'avg_final': g['avg_final'], 'count': g['count']})
     return out
 
@@ -3685,8 +3730,8 @@ def escape_teacher(request):
     if not request.session.get('teacher_auth'):
         return redirect('teacher_dashboard')
 
-    rows = _escape_rows() or []
-    today = datetime.now().date()
+    rows = _escape_dedupe_daily(_escape_rows() or [])
+    today = _kst_now().date()
 
     # ── 기간 선택 (주간/월간/학기) ──
     period = request.GET.get('period', 'weekly')
@@ -3694,26 +3739,27 @@ def escape_teacher(request):
         period = 'weekly'
     period_rows = _escape_period_rows(rows, period, today)
 
-    personal_rank = _escape_rank(period_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
+    personal_rank = _escape_rank(period_rows, lambda r: r['student_id'])
     class_rank    = _escape_rank(period_rows, lambda r: r['class_name'])
 
     # ── 이달의 시상 (선택된 기간과 무관하게 항상 '이번 달' 기준) ──
+    # 시상은 이번 달 _ESCAPE_AWARD_MIN_DAYS일 이상 참여한 학생만 (한 번만 하고 빨리 푼 학생이
+    # 매일 참여한 학생보다 앞서는 것을 막기 위함). 참여 횟수 = 참여한 날 수(하루 1회만 인정).
     month_rows = _escape_period_rows(rows, 'monthly', today)
-    grade_award = _escape_unpack_personal(
-        _escape_rank(month_rows, lambda r: (r['student_id'], r['student_name'], r['class_name']))
-    )[:3]
+    month_ranked = _escape_rank(month_rows, lambda r: r['student_id'])
+    eligible = [g for g in month_ranked if g['count'] >= _ESCAPE_AWARD_MIN_DAYS]
+    grade_award = _escape_unpack_personal(eligible)[:3]
     class_awards = {}
     for cls in CLASS_ORDER:
-        cls_rows = [r for r in month_rows if r['class_name'] == cls]
-        if not cls_rows:
+        cls_groups = [g for g in month_ranked if _escape_student_label(g['items'])[1] == cls]
+        if not cls_groups:
             continue
-        ranked = _escape_rank(cls_rows, lambda r: (r['student_id'], r['student_name']))
-        top3 = []
-        for i, g in enumerate(ranked[:3], start=1):
-            sid, sname = g['key']
-            top3.append({'rank': i, 'student_id': sid, 'student_name': sname,
-                         'avg_final': g['avg_final'], 'count': g['count']})
-        class_awards[cls] = top3
+        cls_eligible = [g for g in cls_groups if g['count'] >= _ESCAPE_AWARD_MIN_DAYS]
+        class_awards[cls] = {
+            'top3': _escape_unpack_personal(cls_eligible)[:3],
+            'eligible': len(cls_eligible),
+            'participants': len(cls_groups),
+        }
 
     # 반별 문제 미리보기: 요청 시에만 생성(캐시 활용) — 대시보드 열 때마다 전체 반을 AI로 생성하지 않도록
     preview_class = request.GET.get('preview_class', '').strip()
@@ -3729,7 +3775,7 @@ def escape_teacher(request):
                 # API 순간 오류·레이트리밋 등으로 특정 반만 폴백 문제에 갇혔을 때 재배포 없이 복구하는 용도.
                 # 주의: 위에서 쓰는 날짜 변수 today를 덮어쓰면 아래 this_month 계산에서
                 # 500 에러가 나므로 다른 이름을 씀
-                today_str = datetime.now().strftime('%Y-%m-%d')
+                today_str = _kst_today_str()
                 _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today_str}", None)
             preview_questions = _escape_get_daily_questions(preview_class)
             preview_is_fallback = (preview_questions == _ESCAPE_FALLBACK_QUESTIONS)
@@ -3752,6 +3798,7 @@ def escape_teacher(request):
         'personal':   _escape_unpack_personal(personal_rank)[:30],
         'class_rank': _escape_unpack_class(class_rank),
         'this_month': today.strftime('%Y년 %m월'),
+        'award_min_days': _ESCAPE_AWARD_MIN_DAYS,
         'grade_award': grade_award,
         'class_awards': class_awards,
     })

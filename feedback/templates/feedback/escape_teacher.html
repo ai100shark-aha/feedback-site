@@ -75,7 +75,8 @@
   </div>
 
   <!-- ══ 이달의 시상 (항상 이번 달 기준, 선택 기간과 무관) ══ -->
-  <h5 class="fw-bold mt-4 mb-2">🏆 {{ this_month }} 시상 대상 (월 1회 시상)</h5>
+  <h5 class="fw-bold mt-4 mb-1">🏆 {{ this_month }} 시상 대상 (월 1회 시상)</h5>
+  <div class="small text-muted mb-2">이번 달 <b>{{ award_min_days }}일 이상</b> 참여한 학생 중 평균 기록이 짧은 순서입니다. 참여는 하루 1회만 인정합니다.</div>
 
   <div class="card shadow-sm mb-2 border-warning">
     <div class="card-body py-2">
@@ -83,26 +84,30 @@
       {% if grade_award %}
       <ol class="mb-0 small">
         {% for r in grade_award %}
-        <li>{{ r.student_name }} ({{ r.class_name }}) — 평균 {{ r.avg_final }}초 · {{ r.count }}회 참여</li>
+        <li>{{ r.student_name }} ({{ r.class_name }}) — 평균 {{ r.avg_final }}초 · {{ r.count }}일 참여</li>
         {% endfor %}
       </ol>
       {% else %}
-      <div class="small text-muted">이번 달 기록이 없습니다.</div>
+      <div class="small text-muted">아직 이번 달 {{ award_min_days }}일 이상 참여한 학생이 없습니다.</div>
       {% endif %}
     </div>
   </div>
 
   <div class="row g-2 mb-4">
-    {% for cls, top3 in class_awards.items %}
+    {% for cls, info in class_awards.items %}
     <div class="col-6 col-md-4">
       <div class="card shadow-sm h-100">
         <div class="card-body py-2">
-          <div class="small fw-bold mb-1">{{ cls }}</div>
+          <div class="small fw-bold mb-1">{{ cls }} <span class="fw-normal text-muted">· 대상 {{ info.eligible }}명 / 참여 {{ info.participants }}명</span></div>
+          {% if info.top3 %}
           <ol class="mb-0 small ps-3">
-            {% for r in top3 %}
-            <li>{{ r.student_name }} — {{ r.avg_final }}초</li>
+            {% for r in info.top3 %}
+            <li>{{ r.student_name }} — {{ r.avg_final }}초 · {{ r.count }}일</li>
             {% endfor %}
           </ol>
+          {% else %}
+          <div class="small text-muted">{{ award_min_days }}일 이상 참여자 없음</div>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -125,7 +130,7 @@
       <h6 class="fw-bold">👤 {{ period_label }} 개인 순위 (평균 최종시간)</h6>
       <div class="table-responsive">
         <table class="table table-sm table-hover bg-white">
-          <thead><tr><th>#</th><th>이름</th><th>반</th><th>평균(초)</th><th>참여</th></tr></thead>
+          <thead><tr><th>#</th><th>이름</th><th>반</th><th>평균(초)</th><th>참여(일)</th></tr></thead>
           <tbody>
             {% for r in personal %}
             <tr>
