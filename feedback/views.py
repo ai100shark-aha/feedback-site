@@ -2923,42 +2923,55 @@ _ESCAPE_DAILY_CACHE = {}
 
 def _escape_recent_lessons(class_name, n=3):
     """해당 반의 '오늘' 이전에 이미 진행된 최근 n개 차시를 날짜 오름차순으로 반환."""
-    today_str = datetime.now().strftime('%Y-%m-%d')
+    today_str = _kst_today_str()  # 한국 날짜 (서버는 UTC)
     lessons = [l for l in LESSONS if l['class'] == class_name and l['date'] < today_str]
     lessons.sort(key=lambda l: l['date'])
     return lessons[-n:]
 
 
-def _escape_feedback_signal(class_name, lessons):
-    """최근 차시들에 대한 그 반 학생들의 '어려움'·'심화질문' 피드백을 모아 반환.
-    반환값: (합쳐진 텍스트, 응답한 학생 수)
-    """
-    if not lessons:
-        return '', 0
-    titles = {l['title'] for l in lessons}
-    try:
-        sheet = get_sheet()
-        rows = sheet.get_all_values()[1:]
-    except Exception as e:
-        print(f"방탈출 피드백 신호 읽기 오류: {e}")
-        return '', 0
+_ESCAPE_EMPTY_ANSWERS = {'', '없음', '없다', '없어요', '없습니다', 'x', 'X', '.', '-', '모름', '모르겠음', '모르겠다', '딱히 없음'}
 
-    texts = []
-    seen_students = set()
+
+def _escape_journal_signal(lessons):
+    """최근 차시들에 대해 학생들이 정보일지에 쓴 내용을 차시별로 모아 반환(피드백 시트 한 번만 읽음).
+    반환: {차시제목: {'learned': [...], 'hard': [...], 'curious': [...], 'pages': (시작,끝)|None, 'n': 학생 수}}
+    - learned(F열 '오늘 배운 내용')가 그날 실제로 무엇을 배웠는지 알려 주는 가장 직접적인 신호.
+    """
+    from collections import Counter
+    titles = {l['title'] for l in lessons}
+    out = {t: {'learned': [], 'hard': [], 'curious': [], 'pages': None, 'n': 0} for t in titles}
+    try:
+        rows = get_sheet().get_all_values()[1:]
+    except Exception as e:
+        print(f"방탈출 일지 신호 읽기 오류: {e}", flush=True)
+        return out
+    page_ranges = {t: [] for t in titles}
+    students = {t: set() for t in titles}
+
+    def keep(v):
+        v = (v or '').strip()
+        return v if v.replace(' ', '') not in _ESCAPE_EMPTY_ANSWERS and len(v) >= 2 else ''
+
     for r in rows:
-        # 실제 시트 레이아웃: [1]=수업명, [2]=학번, [6]=문제해결(어려움), [8]=심화학습
         if len(r) < 9 or r[1] not in titles:
             continue
-        problem = (r[6] or '').strip()
-        deep    = (r[8] or '').strip()
-        if problem:
-            texts.append(f"- (어려웠던 점) {problem}")
-        if deep:
-            texts.append(f"- (더 알고 싶은 점) {deep}")
-        if problem or deep:
-            seen_students.add(r[2])
-
-    return '\n'.join(texts), len(seen_students)
+        t = r[1]
+        students[t].add(r[2])
+        for col, key in ((5, 'learned'), (6, 'hard'), (8, 'curious')):
+            v = keep(r[col])
+            if v:
+                out[t][key].append(v[:200])
+        if len(r) > 10:
+            pr = _parse_page_range(r[10])
+            if pr:
+                page_ranges[t].append(pr)
+    for t in titles:
+        out[t]['n'] = len(students[t])
+        prs = page_ranges[t]
+        if prs:
+            common_start, _ = Counter(p[0] for p in prs).most_common(1)[0]
+            out[t]['pages'] = (common_start, max(p[1] for p in prs if p[0] == common_start))
+    return out
 
 
 def _guide_sheet():
@@ -3232,104 +3245,24 @@ def _parse_page_range(text):
     return (min(nums), max(nums))
 
 
-def _escape_lesson_page_range(lesson_title):
-    """그 차시(lesson_title)에 대해 학생들이 적어낸 '오늘 배운 교과서 페이지'를 모아
-    가장 많이 나온 페이지 범위를 대표값으로 반환. 데이터 없으면 None.
-    (실제 피드백 시트 K열[10] = pages)
-    """
-    try:
-        rows = get_sheet().get_all_values()[1:]
-    except Exception as e:
-        print(f"페이지 신호 읽기 오류: {e}")
-        return None
-
-    ranges = []
-    for r in rows:
-        if len(r) < 11 or r[1] != lesson_title:
-            continue
-        pr = _parse_page_range(r[10])
-        if pr:
-            ranges.append(pr)
-    if not ranges:
-        return None
-
-    from collections import Counter
-    common_start, _ = Counter(r[0] for r in ranges).most_common(1)[0]
-    matching = [r for r in ranges if r[0] == common_start]
-    return (common_start, max(r[1] for r in matching))
-
-
-def _escape_match_chapter_by_pages(page_range, qsets_by_num, mirror):
-    """(시작,끝) 페이지 범위와 가장 많이 겹치는 지도서 차시 번호 반환. 못 찾으면 None."""
-    if not page_range:
-        return None
-    start, end = page_range
-    best, best_overlap = None, 0
-    for num, qs in qsets_by_num.items():
-        pr = _parse_page_range(qs.range_pages)
-        if not pr:
-            continue
-        overlap = min(end, pr[1]) - max(start, pr[0])
-        if overlap > best_overlap:
-            best_overlap, best = overlap, num
-    if best is not None:
-        return best
-    for num, info in mirror.items():
-        pr = _parse_page_range(info.get('range_pages', ''))
-        if not pr:
-            continue
-        overlap = min(end, pr[1]) - max(start, pr[0])
-        if overlap > best_overlap:
-            best_overlap, best = overlap, num
-    return best
-
-
-def _escape_textbook_context(lessons, max_chars=6000):
-    """최근 차시들의 지도서 원문을 모아 반환.
-
-    소스 우선순위 (차시별로 각각 결정):
-    1) 학기 전체 지도서 PDF를 페이지 단위로 저장해둔 것 (_guide_pages_text_for_range)
-       — 그 수업에 학생들이 적어낸 '오늘 배운 교과서 페이지'로 바로 조회. 가장 정확.
-    2) 위에서 못 찾으면 기존 방식: 페이지로 차시번호 추정 → QuizSet(DB)/구글시트 미러
-       (지도서원문 탭)에서 그 차시에 수동 등록된 내용을 찾음
-    3) 그래도 없으면 "그 반의 n번째 수업 = 지도서 n차시"라는 예전 추정으로 폴백
-    """
-    if not lessons:
-        return ''
-
-    parts = []
-    need_chapter_lookup = []  # (lesson, page_range) — 1번에서 못 찾은 것들만 2)로 넘김
-
+def _escape_textbook_for_pages(lessons, journal, max_chars=6000):
+    """차시별로 학생들이 적은 쪽수 범위에 해당하는 지도서 원문만 모아 반환.
+    반환: (원문 텍스트, {차시제목: '지도서 p.a-b' | '지도서 없음(p.a-b)' | '쪽수 기록 없음'})
+    예전에는 쪽수로 못 찾으면 '그 반의 n번째 수업 = 지도서 n차시'로 추정해 다른 단원 내용을
+    끌어왔는데, 그 때문에 진도가 넘어가도 함수 단원 문제만 나와서 제거함."""
+    parts, status = [], {}
     for l in lessons:
-        page_range = _escape_lesson_page_range(l['title'])
-        body = ''
-        if page_range:
-            body = _guide_pages_text_for_range(page_range[0], page_range[1])
+        pr = (journal.get(l['title']) or {}).get('pages')
+        if not pr:
+            status[l['title']] = '쪽수 기록 없음'
+            continue
+        body = _guide_pages_text_for_range(pr[0], pr[1])
         if body:
-            parts.append(f"[{l['title']} · p.{page_range[0]}-{page_range[1]}]\n{body}")
+            parts.append(f"[{l['title']} · 교과서 p.{pr[0]}-{pr[1]}]\n{body}")
+            status[l['title']] = f'지도서 p.{pr[0]}-{pr[1]}'
         else:
-            need_chapter_lookup.append((l, page_range))
-
-    if need_chapter_lookup:
-        all_qsets = {qs.chapter_num: qs for qs in QuizSet.objects.exclude(range_text='')}
-        mirror = _guide_mirror_load_all()
-        chapter_nums = []
-        for l, page_range in need_chapter_lookup:
-            matched = _escape_match_chapter_by_pages(page_range, all_qsets, mirror)
-            chapter_nums.append(matched if matched is not None else l['id'] % 100)
-        for num in sorted(set(chapter_nums)):
-            qs = all_qsets.get(num)
-            title, body = '', ''
-            if qs and (qs.range_text or '').strip():
-                title, body = qs.title, qs.range_text.strip()
-            else:
-                m = mirror.get(num)
-                if m and (m.get('range_text') or '').strip():
-                    title, body = m.get('title', f'{num}차시'), m['range_text'].strip()
-            if body:
-                parts.append(f"[{title}]\n{body}")
-
-    return '\n\n'.join(parts)[:max_chars]
+            status[l['title']] = f'지도서 없음(p.{pr[0]}-{pr[1]})'
+    return '\n\n'.join(parts)[:max_chars], status
 
 
 def _escape_parse_ai_questions(raw_text):
@@ -3361,84 +3294,161 @@ def _escape_parse_ai_questions(raw_text):
     return valid if len(valid) == 3 else None
 
 
-def _escape_generate_questions(class_name):
-    """해당 반의 '오늘의 방탈출' 3문제를 생성.
-    지도서 원문(정답 근거) + 최근 2~3차시 학생 피드백(출제 우선순위 힌트)을 함께 사용.
-    피드백 신호가 부족하거나, 지도서 데이터가 없거나, API 호출이 실패하면
-    조용히 폴백 문제 세트로 대체한다 (절대 빈 화면이 뜨지 않도록).
-    """
+_ESCAPE_QBANK_SHEET_NAME = '방탈출문제'
+_ESCAPE_DAILY_SOURCES = {}            # (반|날짜) → 출제 근거 요약(미리보기 표시용)
+_ESCAPE_GEN_LOCKS = defaultdict(threading.Lock)
+
+
+def _escape_qbank_sheet():
+    """그날 반별로 낸 문제를 저장하는 탭. 서버가 재시작돼도 같은 날 같은 문제를 유지하고,
+    다음 출제 때 최근 문제와 겹치지 않게 하는 데 씀. 선생님이 시트에서 바로 볼 수도 있음."""
+    ss = get_sheet().spreadsheet
+    try:
+        return ss.worksheet(_ESCAPE_QBANK_SHEET_NAME)
+    except Exception:
+        ws = ss.add_worksheet(title=_ESCAPE_QBANK_SHEET_NAME, rows=1000, cols=5)
+        ws.append_row(['날짜', '반', '생성시각', '출처', '문제JSON'])
+        return ws
+
+
+def _escape_qbank_rows(class_name):
+    """그 반의 저장된 문제 기록 [{'date','made','source','questions'}] (오래된 순). 실패 시 []."""
+    try:
+        values = _escape_qbank_sheet().get_all_values()[1:]
+    except Exception as e:
+        print(f"방탈출 문제 기록 읽기 오류: {e}", flush=True)
+        return []
+    out = []
+    for r in values:
+        if len(r) < 5 or r[1] != class_name:
+            continue
+        try:
+            qs = json.loads(r[4])
+        except Exception:
+            continue
+        if isinstance(qs, list) and len(qs) == 3:
+            out.append({'date': r[0], 'made': r[2], 'source': r[3], 'questions': qs})
+    out.sort(key=lambda x: (x['date'], x['made']))
+    return out
+
+
+def _escape_qbank_save(date_str, class_name, source, questions):
+    def job():
+        try:
+            _escape_qbank_sheet().append_row([
+                date_str, class_name, _kst_now().strftime('%Y-%m-%d %H:%M:%S'),
+                source, json.dumps(questions, ensure_ascii=False)])
+        except Exception as e:
+            print(f"방탈출 문제 기록 저장 오류: {e}", flush=True)
+    threading.Thread(target=job, daemon=True).start()
+
+
+def _escape_generate_questions(class_name, avoid=None):
+    """해당 반의 '오늘의 방탈출' 3문제를 생성. 반환: (문제 3개, 출제 근거 요약)
+    - 정보일지 '오늘 배운 내용'으로 그 수업에서 실제로 무엇을 배웠는지 파악(출제 범위)
+    - 학생들이 적은 교과서 쪽수에 해당하는 지도서 원문이 있으면 정답 근거로 사용
+    - avoid: 최근 며칠 동안 이 반에 낸 문제(겹치지 않게)
+    실패하면 폴백 문제 세트."""
+    source = ''
     try:
         lessons = _escape_recent_lessons(class_name, n=3)
-        textbook = _escape_textbook_context(lessons)
-        if not textbook:
-            return list(_ESCAPE_FALLBACK_QUESTIONS)
+        if not lessons:
+            return list(_ESCAPE_FALLBACK_QUESTIONS), '진행된 차시 없음'
+        journal = _escape_journal_signal(lessons)
+        textbook, tb_status = _escape_textbook_for_pages(lessons, journal)
+
+        journal_parts, hard_parts, n_total = [], [], 0
+        for l in lessons:
+            j = journal[l['title']]
+            n_total += j['n']
+            if j['learned']:
+                lines = '\n'.join(f'- {x}' for x in j['learned'][:25])
+                journal_parts.append(f"[{l['title']} ({l['date']}) · 학생 {j['n']}명]\n{lines}")
+            hard_parts += [f'- (어려웠던 점) {x}' for x in j['hard'][:10]]
+            hard_parts += [f'- (더 알고 싶은 점) {x}' for x in j['curious'][:10]]
+        journal_text = '\n\n'.join(journal_parts)[:5000]
+        source = ' / '.join(f"{l['title']}: {tb_status.get(l['title'], '')}, 일지 {journal[l['title']]['n']}명"
+                            for l in lessons)
+
+        if not textbook and not journal_text:
+            return list(_ESCAPE_FALLBACK_QUESTIONS), source + ' → 자료 없음(백업 문제)'
 
         api_key = os.environ.get('ANTHROPIC_API_KEY', '')
         if not api_key:
-            return list(_ESCAPE_FALLBACK_QUESTIONS)
+            return list(_ESCAPE_FALLBACK_QUESTIONS), source + ' → API 키 없음(백업 문제)'
 
-        feedback_text, n_students = _escape_feedback_signal(class_name, lessons)
-        use_feedback = (n_students >= _ESCAPE_FEEDBACK_MIN_STUDENTS
-                         and len(feedback_text) >= _ESCAPE_FEEDBACK_MIN_CHARS)
+        last_title = lessons[-1]['title']
+        avoid_text = '\n'.join(f'- {q}' for q in (avoid or [])[:15]) or '(없음)'
+        prompt = f"""당신은 고등학교 1학년 정보 교사입니다. {class_name}의 수업 시작 전 복습 퀴즈로
+4지선다 객관식 문제 정확히 3개를 만듭니다.
 
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        lesson_titles = ', '.join(l['title'] for l in lessons)
+[1] 최근 수업에서 학생들이 정보일지에 직접 쓴 '오늘 배운 내용' (수업별, 오래된 순)
+{journal_text or '(일지 기록 없음)'}
 
-        prompt = f"""당신은 고등학교 정보 교과 교사입니다.
-아래는 {class_name}의 최근 수업({lesson_titles}) 지도서 원문입니다. 이 내용을 '정답의 유일한 근거'로 삼아
-수업 시작 전 복습용 4지선다 객관식 문제 정확히 3개를 만들어 주세요.
+[2] 그 수업 범위의 지도서 원문
+{textbook or '(이번 수업 범위의 지도서 원문은 아직 등록되지 않았습니다)'}
 
---- 지도서 원문 ---
-{textbook}
----
+[3] 학생들이 어려워하거나 더 궁금해한 점
+{chr(10).join(hard_parts)[:2000] or '(없음)'}
 
-요구사항:
-- 반드시 지도서 원문에 명시된 내용만으로 정답·보기를 구성하세요 (원문에 없는 내용 추측·창작 금지)
-- 선택지 4개 중 정답은 1개, 오답 3개는 그럴듯하지만 명확히 틀리게 만드세요
-- 힌트(hint)는 정답을 직접 말하지 않으면서 생각할 방향을 알려주는 1문장
-- topic은 해당 문제가 다루는 개념 이름(짧게)
-"""
-        if use_feedback:
-            prompt += f"""
---- 참고: 이 반 학생들이 최근 수업에서 어려워하거나 궁금해한 점 ---
-{feedback_text[:3000]}
----
-위 내용은 '어떤 개념을 우선 출제할지' 정하는 참고 자료로만 쓰세요. 정답·보기는 반드시 지도서 원문에만 근거하세요.
-"""
+[4] 최근 며칠 동안 이 반에 이미 낸 문제
+{avoid_text}
 
-        prompt += """
+출제 규칙:
+- 출제 범위는 [1]에서 여러 학생이 공통으로 언급한 개념입니다. 가장 최근 수업({last_title})에서 2문제 이상 내세요.
+- 그 개념이 [2]에 설명돼 있으면 정답과 보기를 [2]에 맞추세요.
+- [2]에 없으면 고등학교 정보 교과서가 다루는 표준적인 사실만으로 정답을 정하세요. 학생 일지는 '무엇을 배웠는지' 파악하는 데만 쓰고, 일지 속 틀린 이해를 정답 근거로 쓰지 마세요. 정답이 하나로 분명하지 않은 문제는 내지 마세요.
+- [3]에 나온 어려운 점이 있으면 그 개념을 우선 고려하세요.
+- [4]와 같은 질문, 같은 개념을 같은 방식으로 묻는 문제는 내지 마세요. 3문제는 서로 다른 개념을 다루세요.
+- 보기 4개 중 정답은 1개, 오답 3개는 그럴듯하지만 분명히 틀리게 만드세요.
+- hint는 정답을 직접 말하지 않고 생각할 방향을 알려 주는 1문장, topic은 짧은 개념 이름입니다.
+
 아래 JSON 배열 형식으로만 응답하세요 (설명·마크다운 없이):
 [
-  {"topic": "개념명", "q": "문제 전문", "choices": ["보기1","보기2","보기3","보기4"], "answer": 0, "hint": "힌트 1문장"}
+  {{"topic": "개념명", "q": "문제 전문", "choices": ["보기1","보기2","보기3","보기4"], "answer": 0, "hint": "힌트 1문장"}}
 ]"""
-
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=_ESCAPE_AI_MODEL,
             max_tokens=2048,
-            output_config={'effort': 'low'},  # 단순 추출형 작업이라 생각 시간을 줄여 응답 속도 확보
+            output_config={'effort': 'low'},
             messages=[{'role': 'user', 'content': prompt}],
+            timeout=60.0,
         )
         raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
         parsed = _escape_parse_ai_questions(raw)
         if parsed:
-            return parsed
+            return parsed, source
+        print(f"방탈출 문제 생성 오류: 응답 형식이 맞지 않음: {raw[:200]}", flush=True)
     except Exception as e:
-        print(f"방탈출 문제 생성 오류: {e}")
+        print(f"방탈출 문제 생성 오류: {e}", flush=True)
+    return list(_ESCAPE_FALLBACK_QUESTIONS), (source + ' → 생성 실패(백업 문제)').strip(' →')
 
-    return list(_ESCAPE_FALLBACK_QUESTIONS)
 
-
-def _escape_get_daily_questions(class_name):
-    """오늘·이 반의 3문제를 캐시에서 가져오거나, 없으면 생성해서 캐시에 저장."""
+def _escape_get_daily_questions(class_name, force=False):
+    """오늘·이 반의 3문제: 메모리 캐시 → 시트에 저장된 오늘 문제 → 새로 생성(시트에 저장).
+    force=True면 오늘 문제를 새로 만들어 덮어씀(교사 '다시 생성')."""
     today = _kst_today_str()
     key = f"{class_name}|{today}"
-    cached = _ESCAPE_DAILY_CACHE.get(key)
-    if cached:
-        return cached
-    questions = _escape_generate_questions(class_name)
-    _ESCAPE_DAILY_CACHE[key] = questions
-    return questions
+    if not force and _ESCAPE_DAILY_CACHE.get(key):
+        return _ESCAPE_DAILY_CACHE[key]
+    with _ESCAPE_GEN_LOCKS[class_name]:   # 같은 반 학생이 동시에 시작해도 한 번만 생성
+        if not force and _ESCAPE_DAILY_CACHE.get(key):
+            return _ESCAPE_DAILY_CACHE[key]
+        history = _escape_qbank_rows(class_name)
+        todays = [h for h in history if h['date'] == today]
+        if todays and not force:
+            _ESCAPE_DAILY_CACHE[key] = todays[-1]['questions']
+            _ESCAPE_DAILY_SOURCES[key] = todays[-1]['source']
+            return todays[-1]['questions']
+        avoid = [q.get('q', '') for h in history[-5:] for q in h['questions']]
+        questions, source = _escape_generate_questions(class_name, avoid=avoid)
+        _ESCAPE_DAILY_CACHE[key] = questions
+        _ESCAPE_DAILY_SOURCES[key] = source
+        if questions != _ESCAPE_FALLBACK_QUESTIONS:
+            _escape_qbank_save(today, class_name, source, questions)
+        return questions
 
 
 def _escape_sheet():
@@ -3858,18 +3868,15 @@ def escape_teacher(request):
     preview_lessons = []
     preview_is_fallback = False
     preview_error = None
+    preview_source = ''
     if preview_class in _ESCAPE_CLASSES:
         try:
             preview_lessons = _escape_recent_lessons(preview_class, n=3)
-            if request.GET.get('force') == '1':
-                # 오늘 이미 캐시된(실패/폴백 포함) 문제를 지우고 강제로 다시 생성.
-                # API 순간 오류·레이트리밋 등으로 특정 반만 폴백 문제에 갇혔을 때 재배포 없이 복구하는 용도.
-                # 주의: 위에서 쓰는 날짜 변수 today를 덮어쓰면 아래 this_month 계산에서
-                # 500 에러가 나므로 다른 이름을 씀
-                today_str = _kst_today_str()
-                _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today_str}", None)
-            preview_questions = _escape_get_daily_questions(preview_class)
+            # '다시 생성'(force=1): 오늘 문제를 새로 만들어 덮어씀(최근 문제와 겹치지 않게)
+            preview_questions = _escape_get_daily_questions(
+                preview_class, force=(request.GET.get('force') == '1'))
             preview_is_fallback = (preview_questions == _ESCAPE_FALLBACK_QUESTIONS)
+            preview_source = _ESCAPE_DAILY_SOURCES.get(f"{preview_class}|{_kst_today_str()}", '')
         except Exception as e:
             print(f"방탈출 미리보기 오류: {e}")
             preview_error = str(e)
@@ -3887,6 +3894,7 @@ def escape_teacher(request):
         'preview_lessons': preview_lessons,
         'preview_is_fallback': preview_is_fallback,
         'preview_error': preview_error,
+        'preview_source': preview_source,
         'period': period,
         'period_label': _ESCAPE_PERIOD_LABELS[period],
         'period_options': [('weekly', '주간'), ('monthly', '월간'), ('semester', '학기')],
