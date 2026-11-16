@@ -2084,9 +2084,18 @@ def _wc_cleanup():
 
 
 def _wc_normalize(word):
-    """단어 정리: 공백/특수문자 제거, 길이 제한"""
-    w = _wc_re.sub(r'[\s]+', ' ', str(word)).strip()
-    w = _wc_re.sub(r'[^\w가-힣 ]', '', w)
+    """
+    단어 정리: 특수문자(!?#+&@%~^♥ 등)·이모지는 그대로 살리고,
+    눈에 안 보이는 제어문자/폭 0 문자만 제거한 뒤 공백 정리, 길이 제한.
+    (화면 표시는 textContent, 시트 저장은 RAW라 특수문자가 들어와도 안전)
+    """
+    import unicodedata as _ud
+    w = _ud.normalize('NFC', str(word))
+    # 제어문자(Cc), 서식문자(Cf: 폭 0 공백 등), 미할당/사설영역 제거 — 단 이모지 결합용 ZWJ(U+200D)는 유지
+    w = ''.join(ch for ch in w
+                if ch == '‍' or not _ud.category(ch).startswith('C')
+                or ch in '\t\n\r')
+    w = _wc_re.sub(r'\s+', ' ', w).strip()
     return w[:20]
 
 
