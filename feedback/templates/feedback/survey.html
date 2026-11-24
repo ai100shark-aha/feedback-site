@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>정보 수업 설문</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    .scale { display:flex; gap:4px; }
+    .scale input { display:none; }
+    .scale label { flex:1; text-align:center; border:1px solid #ced4da; border-radius:6px;
+                   padding:6px 2px; font-size:.78rem; cursor:pointer; background:#fff; line-height:1.2; }
+    .scale label b { display:block; font-size:1rem; }
+    .scale input:checked + label { background:#0d6efd; border-color:#0d6efd; color:#fff; }
+    .area { font-size:.75rem; color:#6c757d; }
+  </style>
+</head>
+<body class="bg-light">
+<div class="container py-4" style="max-width:560px">
+
+  <h1 class="h5 fw-bold mb-1">📝 정보 수업 설문{% if not closed %} ({{ round }}){% endif %}</h1>
+
+  {% if closed %}
+    <div class="alert alert-secondary mt-3">지금은 설문 기간이 아니에요. 선생님이 안내하면 다시 들어와 주세요.</div>
+
+  {% elif done %}
+    <div class="alert alert-success mt-3">{{ name }} 학생, 설문에 답해 주어 고마워요! 🙏<br>
+      솔직한 답변은 정보 수업을 더 좋게 만드는 데 쓰여요.</div>
+
+  {% elif already %}
+    <div class="alert alert-info mt-3">이번 {{ round }} 설문에는 이미 답했어요. 고마워요!</div>
+
+  {% else %}
+    <p class="text-muted small mb-3">
+      이 설문은 성적과 관계없어요. 정답이 없으니 <b>평소 내 모습</b>대로 솔직하게 골라 주세요.<br>
+      응답은 수업 개선과 연구에만 쓰이며, 결과는 이름 없이 통계로만 정리합니다.
+    </p>
+
+    {% if error %}<div class="alert alert-warning py-2 small">{{ error }}</div>{% endif %}
+
+    <form method="POST">
+      {% csrf_token %}
+      <div class="card shadow-sm mb-3"><div class="card-body">
+        <div class="row g-2">
+          <div class="col-4"><label class="form-label small fw-bold">학번</label>
+            <input type="text" name="student_id" class="form-control" maxlength="5" inputmode="numeric"
+                   pattern="\d{5}" placeholder="10113" value="{{ form.student_id|default:'' }}" required></div>
+          <div class="col-3"><label class="form-label small fw-bold">번호</label>
+            <input type="text" name="student_num" class="form-control" maxlength="2" inputmode="numeric"
+                   placeholder="13" value="{{ form.student_num|default:'' }}" required></div>
+          <div class="col-5"><label class="form-label small fw-bold">이름</label>
+            <input type="text" name="student_name" class="form-control" placeholder="홍길동"
+                   value="{{ form.student_name|default:'' }}" required></div>
+        </div>
+      </div></div>
+
+      {% for q in questions %}
+      <div class="card shadow-sm mb-2"><div class="card-body py-2">
+        <div class="area">{{ q.area }}</div>
+        <div class="small fw-bold mb-2">{{ q.no }}. {{ q.text }}</div>
+        <div class="scale">
+          {% for v, lab in scale %}
+            <input type="radio" name="q{{ q.no }}" id="q{{ q.no }}_{{ v }}" value="{{ v }}" required{% if q.sel == v %} checked{% endif %}>
+            <label for="q{{ q.no }}_{{ v }}"><b>{{ v }}</b>{{ lab }}</label>
+          {% endfor %}
+        </div>
+      </div></div>
+      {% endfor %}
+
+      {% for no, q in open_questions %}
+      <div class="card shadow-sm mb-2"><div class="card-body py-2">
+        <div class="small fw-bold mb-2">서술 {{ no }}. {{ q }} <span class="text-muted fw-normal">(선택)</span></div>
+        <textarea name="t{{ no }}" class="form-control form-control-sm" rows="2" maxlength="500">{% if no == 1 %}{{ form.t1|default:"" }}{% else %}{{ form.t2|default:"" }}{% endif %}</textarea>
+      </div></div>
+      {% endfor %}
+
+      <button type="submit" class="btn btn-primary w-100 mt-2">제출하기</button>
+    </form>
+  {% endif %}
+
+  <div class="text-center mt-3">
+    <a href="/" class="btn btn-link btn-sm text-muted">← 메인으로</a>
+  </div>
+</div>
+</body>
+</html>

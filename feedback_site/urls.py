@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from feedback import views
+from feedback import views, survey
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -45,4 +45,7 @@ urlpatterns = [
     path('escape/play/', views.escape_play, name='escape_play'),
     path('escape/teacher/', views.escape_teacher, name='escape_teacher'),
     path('escape/teacher/cleanup/', views.escape_cleanup, name='escape_cleanup'),
+    # ── 연구 설문(사전·사후) ──
+    path('survey/', survey.survey_start, name='survey_start'),
+    path('survey/teacher/', survey.survey_teacher, name='survey_teacher'),
 ]
