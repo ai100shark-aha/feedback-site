@@ -3370,21 +3370,33 @@ def _escape_parse_ai_questions(raw_text):
     return valid if len(valid) == 3 else None
 
 
+_ESCAPE_MODE_FEEDBACK = '피드백반영'   # 지도서 + 학생 피드백(어려움·궁금증)으로 출제 개념 선정
+_ESCAPE_MODE_GUIDE    = '지도서만'     # 피드백 신호 부족 → 지도서만으로 출제
+_ESCAPE_MODE_FALLBACK = '폴백'         # AI 출제 실패/데이터 없음 → 고정 문제
+
+
 def _escape_generate_questions(class_name):
-    """해당 반의 '오늘의 방탈출' 3문제를 생성.
+    """_escape_generate_questions_with_mode()의 문제 목록만 돌려주는 호환용 래퍼."""
+    return _escape_generate_questions_with_mode(class_name)[0]
+
+
+def _escape_generate_questions_with_mode(class_name):
+    """해당 반의 '오늘의 방탈출' 3문제를 생성. 반환: (문제 목록, 출제방식, 근거 차시 제목들)
     지도서 원문(정답 근거) + 최근 2~3차시 학생 피드백(출제 우선순위 힌트)을 함께 사용.
     피드백 신호가 부족하거나, 지도서 데이터가 없거나, API 호출이 실패하면
     조용히 폴백 문제 세트로 대체한다 (절대 빈 화면이 뜨지 않도록).
     """
+    lesson_titles = ''
     try:
         lessons = _escape_recent_lessons(class_name, n=3)
+        lesson_titles = ', '.join(l['title'] for l in lessons)
         textbook = _escape_textbook_context(lessons)
         if not textbook:
-            return list(_ESCAPE_FALLBACK_QUESTIONS)
+            return list(_ESCAPE_FALLBACK_QUESTIONS), _ESCAPE_MODE_FALLBACK, lesson_titles
 
         api_key = os.environ.get('ANTHROPIC_API_KEY', '')
         if not api_key:
-            return list(_ESCAPE_FALLBACK_QUESTIONS)
+            return list(_ESCAPE_FALLBACK_QUESTIONS), _ESCAPE_MODE_FALLBACK, lesson_titles
 
         feedback_text, n_students = _escape_feedback_signal(class_name, lessons)
         use_feedback = (n_students >= _ESCAPE_FEEDBACK_MIN_STUDENTS
@@ -3392,7 +3404,6 @@ def _escape_generate_questions(class_name):
 
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        lesson_titles = ', '.join(l['title'] for l in lessons)
 
         prompt = f"""당신은 고등학교 정보 교과 교사입니다.
 아래는 {class_name}의 최근 수업({lesson_titles}) 지도서 원문입니다. 이 내용을 '정답의 유일한 근거'로 삼아
@@ -3431,23 +3442,97 @@ def _escape_generate_questions(class_name):
         raw = next((b.text for b in msg.content if getattr(b, 'type', None) == 'text'), '')
         parsed = _escape_parse_ai_questions(raw)
         if parsed:
-            return parsed
+            mode = _ESCAPE_MODE_FEEDBACK if use_feedback else _ESCAPE_MODE_GUIDE
+            return parsed, mode, lesson_titles
     except Exception as e:
         print(f"방탈출 문제 생성 오류: {e}")
 
-    return list(_ESCAPE_FALLBACK_QUESTIONS)
+    return list(_ESCAPE_FALLBACK_QUESTIONS), _ESCAPE_MODE_FALLBACK, lesson_titles
+
+
+# ── 연구용 기록: 그날 출제된 문제 세트를 시트에 남긴다 ──────────────────────
+# 서버 메모리 캐시만 쓰면 Render 재시작 시 문제가 사라지고 같은 날 다른 문제가 다시 생성돼
+# "그날 무슨 문제를 풀었는지" 분석할 수 없으므로, 생성 즉시 '방탈출문제' 탭에 저장하고
+# 캐시가 비면 시트에서 그날 세트를 다시 읽어 온다.
+_ESCAPE_QSET_SHEET_NAME = '방탈출문제'
+_ESCAPE_QSET_HEADER = ['생성시각(KST)', '날짜', '반', '세트ID', '출제방식', '근거차시',
+                       '문항', '개념', '문제', '보기1', '보기2', '보기3', '보기4', '정답(1~4)', '힌트']
+
+
+def _escape_qset_sheet():
+    ss = get_sheet().spreadsheet
+    try:
+        return ss.worksheet(_ESCAPE_QSET_SHEET_NAME)
+    except Exception:
+        ws = ss.add_worksheet(title=_ESCAPE_QSET_SHEET_NAME, rows=2000, cols=len(_ESCAPE_QSET_HEADER))
+        ws.append_row(_ESCAPE_QSET_HEADER)
+        return ws
+
+
+def _escape_qset_save(today, class_name, set_id, mode, lesson_titles, questions):
+    """문제 세트 3행 기록 (백그라운드)."""
+    stamp = _kst_now().strftime('%Y-%m-%d %H:%M:%S')
+    rows = []
+    for i, q in enumerate(questions, 1):
+        ch = list(q.get('choices', [])) + [''] * 4
+        rows.append([stamp, today, class_name, set_id, mode, lesson_titles, i,
+                     q.get('topic', ''), q.get('q', ''), ch[0], ch[1], ch[2], ch[3],
+                     int(q.get('answer', 0)) + 1, q.get('hint', '')])
+
+    def job():
+        try:
+            _escape_qset_sheet().append_rows(rows)
+        except Exception as e:
+            print(f"방탈출 문제 세트 저장 오류: {e}", flush=True)
+    threading.Thread(target=job, daemon=True).start()
+
+
+def _escape_qset_load(today, class_name):
+    """시트에서 오늘·이 반의 가장 최근 세트를 읽어 캐시 형식으로 반환. 없으면 None."""
+    try:
+        values = _escape_qset_sheet().get_all_values()[1:]
+    except Exception as e:
+        print(f"방탈출 문제 세트 읽기 오류: {e}", flush=True)
+        return None
+    rows = [r for r in values if len(r) >= 15 and r[1] == today and r[2] == class_name]
+    if not rows:
+        return None
+    last_id = rows[-1][3]
+    rows = sorted((r for r in rows if r[3] == last_id), key=lambda r: int(r[6] or 0))
+    try:
+        questions = [{'topic': r[7], 'q': r[8], 'choices': [r[9], r[10], r[11], r[12]],
+                      'answer': int(r[13]) - 1, 'hint': r[14]} for r in rows]
+    except ValueError:
+        return None
+    if len(questions) != 3:
+        return None
+    return {'set_id': last_id, 'mode': rows[0][4], 'lessons': rows[0][5], 'questions': questions}
+
+
+def _escape_get_daily_set(class_name, force=False):
+    """오늘·이 반의 문제 세트 {'set_id','mode','lessons','questions'}.
+    순서: 메모리 캐시 → 시트(재시작 대비) → 새로 생성(+시트 기록). force=True면 항상 새로 생성."""
+    today = _kst_today_str()
+    key = f"{class_name}|{today}"
+    if not force:
+        cached = _ESCAPE_DAILY_CACHE.get(key)
+        if cached:
+            return cached
+        loaded = _escape_qset_load(today, class_name)
+        if loaded:
+            _ESCAPE_DAILY_CACHE[key] = loaded
+            return loaded
+    questions, mode, lesson_titles = _escape_generate_questions_with_mode(class_name)
+    set_id = f"{today.replace('-', '')}-{class_name.replace('반', '')}-{_kst_now().strftime('%H%M%S')}"
+    entry = {'set_id': set_id, 'mode': mode, 'lessons': lesson_titles, 'questions': questions}
+    _ESCAPE_DAILY_CACHE[key] = entry
+    _escape_qset_save(today, class_name, set_id, mode, lesson_titles, questions)
+    return entry
 
 
 def _escape_get_daily_questions(class_name):
-    """오늘·이 반의 3문제를 캐시에서 가져오거나, 없으면 생성해서 캐시에 저장."""
-    today = _kst_today_str()
-    key = f"{class_name}|{today}"
-    cached = _ESCAPE_DAILY_CACHE.get(key)
-    if cached:
-        return cached
-    questions = _escape_generate_questions(class_name)
-    _ESCAPE_DAILY_CACHE[key] = questions
-    return questions
+    """오늘·이 반의 3문제(목록만)."""
+    return _escape_get_daily_set(class_name)['questions']
 
 
 def _escape_sheet():
@@ -3462,11 +3547,36 @@ def _escape_sheet():
         return ws
 
 
+# 방탈출 탭 K열 이후 연구용 칸 (기존 A~J 10칸은 그대로 두어 순위·집계 로직에 영향 없음)
+_ESCAPE_EXTRA_HEADER = ['세트ID', '출제방식', '문항1오답', '문항2오답', '문항3오답',
+                        '고른오답(문항:보기)', '힌트본문항', '시각(KST)']
+_ESCAPE_HEADER_OK = {'done': False}
+
+
+def _escape_ensure_extra_header(ws):
+    """방탈출 탭에 K~R 헤더가 없으면 추가 (프로세스당 1회)."""
+    if _ESCAPE_HEADER_OK['done']:
+        return
+    need = 10 + len(_ESCAPE_EXTRA_HEADER)
+    if ws.col_count < need:
+        ws.add_cols(need - ws.col_count)
+    head = ws.row_values(1)
+    if len(head) < need:
+        ws.update(range_name='K1', values=[_ESCAPE_EXTRA_HEADER])
+    _ESCAPE_HEADER_OK['done'] = True
+
+
 def _escape_log(row):
     """한 줄 기록 (백그라운드, 학생 응답 지연 없음)."""
     def job():
         try:
-            _escape_sheet().append_row(row)
+            ws = _escape_sheet()
+            if len(row) > 10:
+                try:
+                    _escape_ensure_extra_header(ws)
+                except Exception as e:
+                    print(f"방탈출 헤더 확장 오류: {e}", flush=True)
+            ws.append_row(row)
         except Exception as e:
             print(f"방탈출 시트 저장 오류: {e}")
     threading.Thread(target=job, daemon=True).start()
@@ -3577,7 +3687,12 @@ def escape_start(request):
             }
             # 그 반의 '오늘의 방탈출' 3문제를 세션에 그대로 스냅샷으로 저장.
             # (진행 중에 캐시가 새로 생성되더라도 이미 시작한 학생의 문제는 바뀌지 않도록)
-            request.session['escape_questions'] = _escape_get_daily_questions(class_name)
+            daily = _escape_get_daily_set(class_name)
+            request.session['escape_questions'] = daily['questions']
+            request.session['escape_set_id'] = daily['set_id']
+            request.session['escape_mode'] = daily['mode']
+            request.session['escape_wrong_by_q'] = [0, 0, 0]
+            request.session['escape_wrong_picks'] = []   # [[문항번호, 고른보기번호], ...] (1부터)
             request.session['escape_start_at'] = datetime.now().isoformat()
             request.session['escape_q'] = 0
             request.session['escape_hints'] = 0
@@ -3620,6 +3735,14 @@ def escape_play(request):
                 return redirect('escape_play')
             else:
                 request.session['escape_wrong'] = request.session.get('escape_wrong', 0) + 1
+                by_q = request.session.get('escape_wrong_by_q') or [0] * len(questions)
+                while len(by_q) < len(questions):
+                    by_q.append(0)
+                by_q[qidx] += 1
+                request.session['escape_wrong_by_q'] = by_q
+                picks = request.session.get('escape_wrong_picks', [])
+                picks.append([qidx + 1, choice + 1])
+                request.session['escape_wrong_picks'] = picks
                 return render(request, 'feedback/escape_play.html', {
                     'q': questions[qidx], 'qidx': qidx,
                     'total': len(questions),
@@ -3664,10 +3787,18 @@ def _escape_finish(request):
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'), today,
         student['student_id'], student['student_num'], student['student_name'],
         student['class_name'], result['duration'], hints, penalty, result['final'],
+        # ── 연구용 칸 (K~R) ──
+        request.session.get('escape_set_id', ''),
+        request.session.get('escape_mode', ''),
+        *((request.session.get('escape_wrong_by_q') or [0, 0, 0]) + [0, 0, 0])[:3],
+        ', '.join(f"{q}:{c}" for q, c in request.session.get('escape_wrong_picks', [])),
+        ', '.join(str(i + 1) for i in sorted(request.session.get('escape_hint_seen', []))),
+        _kst_now().strftime('%Y-%m-%d %H:%M:%S'),
     ])
 
     for k in ('escape_student', 'escape_questions', 'escape_start_at',
-              'escape_q', 'escape_hints', 'escape_hint_seen', 'escape_wrong'):
+              'escape_q', 'escape_hints', 'escape_hint_seen', 'escape_wrong',
+              'escape_set_id', 'escape_mode', 'escape_wrong_by_q', 'escape_wrong_picks'):
         request.session.pop(k, None)
 
     return render(request, 'feedback/escape_result.html', {
@@ -3866,6 +3997,8 @@ def escape_teacher(request):
     preview_questions = None
     preview_lessons = []
     preview_is_fallback = False
+    preview_mode = ''
+    preview_set_id = ''
     preview_error = None
     if preview_class in _ESCAPE_CLASSES:
         try:
@@ -3875,9 +4008,13 @@ def escape_teacher(request):
                 # API 순간 오류·레이트리밋 등으로 특정 반만 폴백 문제에 갇혔을 때 재배포 없이 복구하는 용도.
                 # 주의: 위에서 쓰는 날짜 변수 today를 덮어쓰면 아래 this_month 계산에서
                 # 500 에러가 나므로 다른 이름을 씀
-                today_str = _kst_today_str()
-                _ESCAPE_DAILY_CACHE.pop(f"{preview_class}|{today_str}", None)
-            preview_questions = _escape_get_daily_questions(preview_class)
+                # (시트에 저장된 오늘 세트도 건너뛰고 새 세트ID로 생성·기록)
+                preview_set = _escape_get_daily_set(preview_class, force=True)
+            else:
+                preview_set = _escape_get_daily_set(preview_class)
+            preview_questions = preview_set['questions']
+            preview_mode = preview_set['mode']
+            preview_set_id = preview_set['set_id']
             preview_is_fallback = (preview_questions == _ESCAPE_FALLBACK_QUESTIONS)
         except Exception as e:
             print(f"방탈출 미리보기 오류: {e}")
@@ -3895,6 +4032,8 @@ def escape_teacher(request):
         'preview_questions': preview_questions,
         'preview_lessons': preview_lessons,
         'preview_is_fallback': preview_is_fallback,
+        'preview_mode': preview_mode,
+        'preview_set_id': preview_set_id,
         'preview_error': preview_error,
         'period': period,
         'period_label': _ESCAPE_PERIOD_LABELS[period],
