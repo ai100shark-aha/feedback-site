@@ -31,10 +31,12 @@
     <div class="alert alert-info mt-3">이번 {{ round }} 설문에는 이미 답했어요. 고마워요!</div>
 
   {% else %}
-    <p class="text-muted small mb-3">
-      이 설문은 성적과 관계없어요. 정답이 없으니 <b>평소 내 모습</b>대로 솔직하게 골라 주세요.<br>
-      응답은 수업 개선과 연구에만 쓰이며, 결과는 이름 없이 통계로만 정리합니다.
-    </p>
+    <div class="alert alert-light border small mb-3">
+      ✔ 이 설문은 <b>성적과 과세특에 반영되지 않아요.</b><br>
+      ✔ 학번·이름은 <b>본인 확인에만</b> 쓰고, <b>이름은 저장하지 않아요.</b> 학번은 알아볼 수 없는 코드로 바꿔 저장해요.<br>
+      ✔ 선생님은 누가 어떻게 답했는지 보지 않고, <b>반별·전체 통계만</b> 봐요.<br>
+      정답이 없으니 <b>평소 내 모습</b>대로 솔직하게 골라 주세요.
+    </div>
 
     {% if error %}<div class="alert alert-warning py-2 small">{{ error }}</div>{% endif %}
 

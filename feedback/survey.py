@@ -3,7 +3,13 @@
 - 학생: /survey/  → 학번·번호·이름 확인 후 5점 척도 15문항 + 서술 2문항, 차수(사전/사후)당 1회 제출
 - 교사: /survey/teacher/ → 설문 열기(사전/사후)·닫기, 반별 응답 수, 문항별 평균 비교
 - 저장: 스프레드시트 '설문' 탭(응답), '설문설정' 탭(A2 = 현재 열린 차수)
+- 개인정보 분리: 학번·이름은 본인 확인에만 쓰고, 시트에는 이름 없이 학번을 바꾼 '응답코드'만 저장한다.
+  같은 학번은 항상 같은 코드가 되므로 사전·사후 짝짓기와 중복 방지는 그대로 된다.
+  (완전 익명은 아님: 비밀값을 아는 사람은 학번으로 코드를 다시 계산해 볼 수 있다.)
 """
+import hashlib
+import hmac
+import os
 import threading
 from collections import defaultdict
 
@@ -40,12 +46,22 @@ OPEN_QUESTIONS = [
     '정보 수업이 시작되기 전, 정보실에서 주로 무엇을 하나요?',
     '수업일지·지난주 돌아보기·매일방탈출에서 좋았던 점이나 바꾸고 싶은 점을 자유롭게 적어 주세요.',
 ]
-HEADER = (['제출시각(KST)', '차수', '학번', '번호', '이름', '반']
+HEADER = (['제출시각(KST)', '차수', '응답코드', '반']
           + [f'Q{i}' for i in range(1, len(QUESTIONS) + 1)]
           + [f'서술{i}' for i in range(1, len(OPEN_QUESTIONS) + 1)])
 
+N_META = 4   # 제출시각, 차수, 응답코드, 반
 _lock = threading.Lock()
 _round_cache = {'value': None}
+_migrated = {'done': False}
+
+
+def response_code(student_id):
+    """학번 → 응답코드(10자리). 비밀값은 환경변수 SURVEY_SALT, 없으면 Django SECRET_KEY.
+    ※ 운영 중에 비밀값을 바꾸면 사전·사후 코드가 달라져 짝짓기가 끊기므로 바꾸지 말 것."""
+    from django.conf import settings
+    salt = os.environ.get('SURVEY_SALT') or settings.SECRET_KEY
+    return hmac.new(salt.encode(), str(student_id).strip().encode(), hashlib.sha256).hexdigest()[:10]
 
 
 # ── 시트 ────────────────────────────────────────────────────────
@@ -60,7 +76,29 @@ def _ws(name, header):
 
 
 def _survey_ws():
-    return _ws(SURVEY_SHEET, HEADER)
+    ws = _ws(SURVEY_SHEET, HEADER)
+    if not _migrated['done']:
+        _migrate_identified_rows(ws)
+        _migrated['done'] = True
+    return ws
+
+
+def _migrate_identified_rows(ws):
+    """예전 형식(학번·번호·이름 저장) 응답이 있으면 이름을 지우고 응답코드로 바꿔 시트 전체를 다시 쓴다."""
+    try:
+        values = ws.get_all_values()
+        if not values or len(values[0]) < 3 or values[0][2] != '학번':
+            return
+        new_rows = [HEADER]
+        for r in values[1:]:
+            if len(r) < 6:
+                continue
+            new_rows.append([r[0], r[1], response_code(r[2]), r[5]] + r[6:])
+        ws.clear()
+        ws.update(range_name='A1', values=new_rows)
+        print(f"설문 응답 {len(new_rows) - 1}건을 응답코드 형식으로 변환함", flush=True)
+    except Exception as e:
+        print(f"설문 형식 변환 오류: {e}", flush=True)
 
 
 def _setting_ws():
@@ -129,14 +167,15 @@ def survey_start(request):
     texts = [p.get(f't{i}', '').strip()[:500] for i in range(1, len(OPEN_QUESTIONS) + 1)]
 
     if not error:
+        code = response_code(sid)
         with _lock:
             rows = _rows()
             if rows is None:
                 error = '잠시 후 다시 시도해 주세요. (저장소 연결 오류)'
-            elif any(len(r) > 2 and r[1] == rnd and r[2] == sid for r in rows):
+            elif any(len(r) > 2 and r[1] == rnd and r[2] == code for r in rows):
                 return render(request, 'feedback/survey.html', {**ctx, 'already': True})
             else:
-                row = [V._kst_now().strftime('%Y-%m-%d %H:%M:%S'), rnd, sid, snum, sname, class_name] + answers + texts
+                row = [V._kst_now().strftime('%Y-%m-%d %H:%M:%S'), rnd, code, class_name] + answers + texts
                 try:
                     _survey_ws().append_row(row)
                 except Exception as e:
@@ -167,12 +206,12 @@ def survey_teacher(request):
     # 같은 차수·학번이 여러 번 있으면 첫 제출만 사용
     seen, data = set(), []
     for r in rows:
-        if len(r) < 6 + nq or (r[1], r[2]) in seen:
+        if len(r) < N_META + nq or (r[1], r[2]) in seen:
             continue
         seen.add((r[1], r[2]))
         try:
-            data.append({'round': r[1], 'class': r[5], 'id': r[2],
-                         'ans': [int(x) for x in r[6:6 + nq]]})
+            data.append({'round': r[1], 'class': r[3], 'id': r[2],
+                         'ans': [int(x) for x in r[N_META:N_META + nq]]})
         except ValueError:
             continue
 
